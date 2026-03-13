@@ -12,11 +12,97 @@ function parsePlaces(raw) {
     .filter((s) => s.length > 0);
 }
 
+
+/**
+ * Read an SSE stream from a fetch Response and call onEvent for each parsed JSON event.
+ * onEvent may be async — it is awaited between events so the browser can repaint.
+ */
+async function readSSEStream(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop(); // keep incomplete line in buffer
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("data:")) {
+        const jsonStr = trimmed.slice(5).trim();
+        if (jsonStr) {
+          try {
+            await onEvent(JSON.parse(jsonStr));
+          } catch (e) {
+            console.warn("SSE parse error:", e, jsonStr);
+          }
+        }
+      }
+    }
+  }
+}
+
+
+/**
+ * Fetch the actual walking geometry from OSRM for a list of coordinates in visit order.
+ * Queries each consecutive pair to get the real road-following path.
+ *
+ * @param {Array<{lat: number, lon: number}>} orderedCoords - Coordinates in route order
+ * @returns {Promise<Array<[number, number]>>} - Array of [lat, lon] for the full polyline
+ */
+async function fetchWalkingGeometry(orderedCoords) {
+  const allLatLngs = [];
+
+  for (let i = 0; i < orderedCoords.length - 1; i++) {
+    const from = orderedCoords[i];
+    const to = orderedCoords[i + 1];
+    const url =
+      `https://router.project-osrm.org/route/v1/foot/` +
+      `${from.lon},${from.lat};${to.lon},${to.lat}` +
+      `?overview=full&geometries=geojson`;
+
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        console.warn(`OSRM route request failed for segment ${i}: HTTP ${resp.status}`);
+        // Fallback: straight line for this segment
+        allLatLngs.push([from.lat, from.lon]);
+        continue;
+      }
+      const data = await resp.json();
+      if (data.code === "Ok" && data.routes && data.routes[0]) {
+        const coords = data.routes[0].geometry.coordinates; // [lon, lat] pairs
+        for (const [lon, lat] of coords) {
+          allLatLngs.push([lat, lon]);
+        }
+      } else {
+        // Fallback: straight line
+        allLatLngs.push([from.lat, from.lon]);
+      }
+    } catch (err) {
+      console.warn(`OSRM route request error for segment ${i}:`, err);
+      allLatLngs.push([from.lat, from.lon]);
+    }
+  }
+
+  // Ensure the last point is included
+  if (orderedCoords.length > 0) {
+    const last = orderedCoords[orderedCoords.length - 1];
+    allLatLngs.push([last.lat, last.lon]);
+  }
+
+  return allLatLngs;
+}
+
+
 document.addEventListener("DOMContentLoaded", () => {
   const mapEl = document.getElementById("map");
   if (!mapEl) return;
 
-  // Initial view: London (will recenter once destination results arrive)
   const londonLatLng = [51.5074, -0.1278];
   const map = L.map("map").setView(londonLatLng, 12);
 
@@ -26,11 +112,123 @@ document.addEventListener("DOMContentLoaded", () => {
   }).addTo(map);
 
   const markers = [];
+  let routePolyline = null;
 
   function clearMarkers() {
     while (markers.length) {
-      const m = markers.pop();
-      map.removeLayer(m);
+      map.removeLayer(markers.pop());
+    }
+  }
+
+  function clearRoute() {
+    if (routePolyline) {
+      map.removeLayer(routePolyline);
+      routePolyline = null;
+    }
+  }
+
+  /**
+   * Draw a straight-line polyline through route indices (used for progress animation).
+   */
+  function drawRoute(routeIndices, geocodedCoords, color = "#0d6efd") {
+    clearRoute();
+    const latlngs = routeIndices
+      .filter((i) => i < geocodedCoords.length)
+      .map((i) => [geocodedCoords[i].lat, geocodedCoords[i].lon]);
+
+    if (latlngs.length < 2) return;
+
+    routePolyline = L.polyline(latlngs, {
+      color: color,
+      weight: 4,
+      opacity: 0.8,
+    }).addTo(map);
+  }
+
+  /**
+   * Draw a polyline from raw [lat, lon] coordinate array (used for OSRM walking geometry).
+   */
+  function drawRawPolyline(latlngs, color = "#0d6efd") {
+    clearRoute();
+    if (latlngs.length < 2) return;
+
+    routePolyline = L.polyline(latlngs, {
+      color: color,
+      weight: 4,
+      opacity: 0.8,
+    }).addTo(map);
+  }
+
+  /**
+   * Small delay so the browser can repaint between progress events.
+   */
+  function animationDelay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * After geocoding, call /api/solve/stream with the coordinates and
+   * progressively draw the route on the map as SSE events arrive.
+   */
+  async function solveRoute(geocodedCoords) {
+    // OSRM expects [lon, lat] order
+    const coordinates = geocodedCoords.map((c) => [c.lon, c.lat]);
+
+    setStatus("Fetching walking times from OSRM...");
+
+    const resp = await fetch("/api/solve/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coordinates }),
+    });
+
+    if (!resp.ok) {
+      setStatus(`Route solving failed: HTTP ${resp.status}`);
+      return;
+    }
+
+    let finalRoute = null;
+    let finalCost = null;
+    const totalPlaces = geocodedCoords.length;
+
+    await readSSEStream(resp, async (event) => {
+      if (event.type === "matrix") {
+        setStatus(`Distance matrix ready (${event.size} places). Solving route...`);
+      } else if (event.type === "progress") {
+        const visited = event.route.length - 1;
+        drawRoute(event.route, geocodedCoords, "#6c757d");
+        setStatus(`Solving: visited ${visited} of ${totalPlaces} place(s)...`);
+        // Yield to browser so Leaflet can repaint the polyline
+        await animationDelay(300);
+      } else if (event.type === "done") {
+        finalRoute = event.route;
+        finalCost = event.cost;
+        // Draw straight-line version immediately while we fetch real geometry
+        drawRoute(event.route, geocodedCoords, "#0d6efd");
+        const minutes = (event.cost / 60).toFixed(1);
+        setStatus(`Route found! Total walking time: ${minutes} min. Loading walking path...`);
+      } else if (event.type === "error") {
+        setStatus(`Solve error: ${event.message}`);
+      }
+    });
+
+    if (!finalRoute) {
+      setStatus("Route solving ended without a result.");
+      return;
+    }
+
+    // Fetch real walking geometry from OSRM for the final route
+    try {
+      const orderedCoords = finalRoute
+        .filter((i) => i < geocodedCoords.length)
+        .map((i) => geocodedCoords[i]);
+
+      const walkingLatLngs = await fetchWalkingGeometry(orderedCoords);
+      drawRawPolyline(walkingLatLngs, "#0d6efd");
+      const minutes = (finalCost / 60).toFixed(1);
+      setStatus(`Route found! Total walking time: ${minutes} min`);
+    } catch (err) {
+      console.warn("Failed to fetch walking geometry, keeping straight lines:", err);
     }
   }
 
@@ -54,17 +252,15 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       clearMarkers();
-      if (solveBtn) {
-        solveBtn.disabled = true;
-      }
+      clearRoute();
+      if (solveBtn) solveBtn.disabled = true;
       setStatus(`Geocoding ${places.length} place(s)...`);
 
       try {
+        // --- Step 1: Geocode ---
         const resp = await fetch("/api/geocode", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ destination, places }),
         });
 
@@ -76,7 +272,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const data = await resp.json();
         const results = Array.isArray(data.results) ? data.results : [];
 
-        let successCount = 0;
+        const geocodedCoords = [];
         let bounds = [];
 
         results.forEach((r) => {
@@ -91,33 +287,38 @@ document.addEventListener("DOMContentLoaded", () => {
             .bindPopup(r.display_name || r.name);
           markers.push(m);
           bounds.push([lat, lon]);
-          successCount += 1;
+          geocodedCoords.push({ lat, lon, name: r.name });
         });
 
         if (bounds.length > 0) {
           map.fitBounds(bounds, { padding: [40, 40] });
-        } else {
-          // No markers were added; keep initial view.
         }
 
-        if (successCount === 0) {
+        if (geocodedCoords.length === 0) {
           setStatus("No places could be geocoded. Please refine your input.");
-        } else if (successCount === places.length) {
-          setStatus(`Geocoded all ${successCount} place(s).`);
-        } else {
+          return;
+        }
+
+        if (geocodedCoords.length < places.length) {
           setStatus(
-            `Geocoded ${successCount}/${places.length} place(s). Some were not found.`
+            `Geocoded ${geocodedCoords.length}/${places.length} place(s). Solving with found places...`
           );
+        } else {
+          setStatus(`Geocoded all ${geocodedCoords.length} place(s). Solving route...`);
+        }
+
+        // --- Step 2: Solve route ---
+        if (geocodedCoords.length >= 2) {
+          await solveRoute(geocodedCoords);
+        } else {
+          setStatus("Need at least 2 places to solve a route.");
         }
       } catch (err) {
         console.error(err);
-        setStatus("Geocoding failed. Please try again.");
+        setStatus("Something went wrong. Please try again.");
       } finally {
-        if (solveBtn) {
-          solveBtn.disabled = false;
-        }
+        if (solveBtn) solveBtn.disabled = false;
       }
     });
   }
 });
-

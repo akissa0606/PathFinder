@@ -1,12 +1,16 @@
 from pathlib import Path
 import asyncio
+import json
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, field_validator
+from sse_starlette.sse import EventSourceResponse
 
 from app.services.nominatim import geocode_place
+from app.services.osrm import get_distance_matrix
+from app.services.solver import run_nn_with_progress
 
 app = FastAPI(title="Travel Route Optimizer")
 
@@ -76,10 +80,50 @@ async def api_geocode(payload: GeocodeRequest) -> GeocodeResponse:
         if geocoded is None:
             results.append(GeocodeResult(name=raw, error="Not found."))
         else:
-            results.append(GeocodeResult(**geocoded.model_dump()))
+            results.append(GeocodeResult(**geocoded))
 
         # Respect Nominatim 1 req/sec policy, but not after the last item
         if idx < len(payload.places) - 1:
             await asyncio.sleep(1.0)
 
     return GeocodeResponse(results=results)
+
+
+class SolveRequest(BaseModel):
+    coordinates: list[list[float]]
+
+    @field_validator("coordinates")
+    @classmethod
+    def at_least_two_coordinates(cls, v: list[list[float]]) -> list[list[float]]:
+        if len(v) < 2:
+            raise ValueError("Need at least 2 coordinates to solve a route")
+        for coord in v:
+            if len(coord) != 2:
+                raise ValueError("Each coordinate must be [lon, lat]")
+        return v
+
+
+@app.post("/api/solve/stream")
+async def api_solve_stream(payload: SolveRequest):
+    """
+    Solve TSP via Nearest Neighbor and stream progress as Server-Sent Events.
+
+    Body: {"coordinates": [[lon, lat], [lon, lat], ...]}
+    Events: {"type": "matrix", "size": N}
+            {"type": "progress", "route": [...], "cost": float}
+            {"type": "done", "route": [...], "cost": float}
+            {"type": "error", "message": "..."}
+    """
+    coords = [tuple(c) for c in payload.coordinates]
+
+    async def event_generator():
+        try:
+            matrix = await get_distance_matrix(coords)
+            yield json.dumps({"type": "matrix", "size": len(matrix)})
+
+            async for event in run_nn_with_progress(matrix, start_index=0):
+                yield json.dumps(event)
+        except Exception as exc:
+            yield json.dumps({"type": "error", "message": str(exc)})
+
+    return EventSourceResponse(event_generator())

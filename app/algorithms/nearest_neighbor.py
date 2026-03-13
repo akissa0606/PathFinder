@@ -5,6 +5,8 @@ Greedy algorithm: at each step, go to the nearest unvisited city.
 Fast O(N²) but not optimal. Used as a baseline for comparison with Simulated Annealing.
 """
 
+from collections.abc import Callable
+
 from app.algorithms.tsp_tw_utils import evaluate_route
 
 
@@ -13,6 +15,7 @@ def solve(
     start_index: int = 0,
     time_windows: list[tuple[float, float]] | None = None,
     service_time: float = 0,
+    progress_callback: Callable[[list[int], float], None] | None = None,
 ) -> tuple[list[int], float]:
     """
     Solve TSP using the Nearest Neighbor heuristic.
@@ -48,6 +51,9 @@ def solve(
     current = start_index
     total_cost = 0.0
 
+    if progress_callback is not None:
+        progress_callback(route.copy(), total_cost)
+
     while len(visited) < n:
         best_j = -1
         best_time = float("inf")
@@ -63,6 +69,9 @@ def solve(
         current = best_j
         visited.add(best_j)
 
+        if progress_callback is not None:
+            progress_callback(route.copy(), total_cost)
+
     # Return leg to start
     total_cost += matrix[current][start_index]
     route.append(start_index)
@@ -71,5 +80,8 @@ def solve(
         total_cost, _ = evaluate_route(
             route, matrix, time_windows, service_time=service_time
         )
+
+    if progress_callback is not None:
+        progress_callback(route.copy(), total_cost)
 
     return (route, total_cost)

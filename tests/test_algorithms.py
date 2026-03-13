@@ -123,3 +123,58 @@ def test_nearest_neighbor_with_time_windows_returns_penalized_cost():
     # Leave 1 at 10, arrive 2 at 45. Ok. Return 0 at 60. Cost = 60, no violations.
     assert cost == 60.0
     assert route == [0, 1, 2, 0]
+
+
+# --- progress_callback tests ---
+
+
+def test_nearest_neighbor_progress_callback_fires():
+    """progress_callback is called for each step and the final route."""
+    matrix = [
+        [0, 10, 15, 20],
+        [10, 0, 35, 25],
+        [15, 35, 0, 30],
+        [20, 25, 30, 0],
+    ]
+    events = []
+    solve(matrix, start_index=0, progress_callback=lambda r, c: events.append((r, c)))
+
+    # Expect: initial [0], then [0,1], [0,1,3], [0,1,3,2], then final [0,1,3,2,0]
+    assert len(events) == 5
+    assert events[0][0] == [0]
+    assert events[1][0] == [0, 1]
+    assert events[2][0] == [0, 1, 3]
+    assert events[3][0] == [0, 1, 3, 2]
+    assert events[4][0] == [0, 1, 3, 2, 0]
+
+
+def test_nearest_neighbor_progress_callback_none_is_safe():
+    """Passing progress_callback=None should not change behavior."""
+    matrix = [[0, 10], [10, 0]]
+    route, cost = solve(matrix, start_index=0, progress_callback=None)
+    assert route == [0, 1, 0]
+    assert cost == 20.0
+
+
+# --- solver service tests ---
+
+
+@pytest.mark.asyncio
+async def test_run_nn_with_progress_yields_events():
+    """run_nn_with_progress yields progress and done events."""
+    from app.services.solver import run_nn_with_progress
+
+    matrix = [
+        [0, 10, 15],
+        [10, 0, 35],
+        [15, 35, 0],
+    ]
+    events = []
+    async for event in run_nn_with_progress(matrix, start_index=0):
+        events.append(event)
+
+    # Should have multiple progress events and one done event
+    assert events[-1]["type"] == "done"
+    assert events[-1]["route"] == [0, 1, 2, 0]
+    progress_events = [e for e in events if e["type"] == "progress"]
+    assert len(progress_events) >= 1
