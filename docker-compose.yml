@@ -1,5 +1,3 @@
-version: "3.9"
-
 # PathFinder v2 — Self-hosted OSRM routing engines for Hungary
 #
 # Setup (one-time):
@@ -32,7 +30,7 @@ version: "3.9"
 
 services:
   osrm-foot:
-    image: osrm/osrm-backend:latest
+    image: osrm/osrm-backend:v5.25.0
     container_name: pathfinder-osrm-foot
     ports:
       - "5000:5000"
@@ -42,7 +40,7 @@ services:
     restart: unless-stopped
 
   osrm-car:
-    image: osrm/osrm-backend:latest
+    image: osrm/osrm-backend:v5.25.0
     container_name: pathfinder-osrm-car
     ports:
       - "5001:5000"
@@ -52,7 +50,7 @@ services:
     restart: unless-stopped
 
   osrm-bicycle:
-    image: osrm/osrm-backend:latest
+    image: osrm/osrm-backend:v5.25.0
     container_name: pathfinder-osrm-bicycle
     ports:
       - "5002:5000"

@@ -106,10 +106,16 @@ async def test_places_schema(db):
 
 
 @pytest.mark.asyncio
+async def test_distance_cache_schema(db):
+    cursor = await db.execute("PRAGMA table_info(distance_cache)")
+    columns = {row["name"] async for row in cursor}
+    expected = {"trip_id", "from_place_id", "to_place_id", "duration_seconds"}
+    assert expected <= columns
+
+
+@pytest.mark.asyncio
 async def test_init_db_is_idempotent(db):
     """Running init_db twice should not raise."""
-    import app.config as cfg
-    cfg.settings.database_path = TEST_DB
     from app.db import init_db
     await init_db()  # second call — should succeed silently
 

@@ -10,6 +10,7 @@
 """
 
 import os
+from collections.abc import AsyncGenerator
 
 import aiosqlite
 
@@ -62,11 +63,14 @@ CREATE TABLE IF NOT EXISTS distance_cache (
 """
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Open and return a database connection with row_factory set."""
+async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
+    """FastAPI dependency that yields a DB connection and closes it on exit."""
     db = await aiosqlite.connect(settings.database_path)
     db.row_factory = aiosqlite.Row
-    return db
+    try:
+        yield db
+    finally:
+        await db.close()
 
 
 async def init_db() -> None:
