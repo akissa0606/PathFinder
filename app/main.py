@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db
+from app.routers import places, search, trips
 
 
 @asynccontextmanager
@@ -27,6 +28,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PathFinder v2", lifespan=lifespan)
+
+app.include_router(trips.router)
+app.include_router(places.router)
+app.include_router(search.router)
 
 
 @app.get("/health")

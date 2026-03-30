@@ -93,6 +93,10 @@ class PlaceResponse(BaseModel):
     created_at: str
 
 
+class TripDetailResponse(TripResponse):
+    places: list[PlaceResponse] = []
+
+
 # ---------------------------------------------------------------------------
 # Check-in
 # ---------------------------------------------------------------------------
