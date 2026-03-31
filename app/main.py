@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db
-from app.routers import places, search, trips
+from app.routers import feasibility, places, search, trips
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ app = FastAPI(title="PathFinder v2", lifespan=lifespan)
 app.include_router(trips.router)
 app.include_router(places.router)
 app.include_router(search.router)
+app.include_router(feasibility.router)
 
 
 @app.get("/health")

@@ -40,3 +40,18 @@ export async function updatePlace(tripId, placeId, data) {
   })
   return res.json()
 }
+
+export async function geocode(query) {
+  const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`)
+  return res.json()
+}
+
+export async function getFeasibility(tripId, lat, lon) {
+  const params = new URLSearchParams()
+  if (lat != null && lon != null) {
+    params.set('lat', lat)
+    params.set('lon', lon)
+  }
+  const res = await fetch(`/api/trips/${tripId}/feasibility?${params}`)
+  return res.json()
+}

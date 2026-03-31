@@ -10,6 +10,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
+@router.get("/geocode")
+async def geocode(q: str = Query(..., min_length=1)) -> list[dict]:
+    """Geocode a place name using Nominatim. Returns up to 5 results."""
+    async with httpx.AsyncClient(
+        timeout=10.0,
+        headers={"User-Agent": "PathFinder/2.0"},
+    ) as client:
+        resp = await client.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": q, "format": "json", "limit": 5, "addressdetails": 1},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = []
+    for item in data:
+        results.append({
+            "name": item.get("display_name", ""),
+            "lat": float(item["lat"]),
+            "lon": float(item["lon"]),
+            "type": item.get("type", ""),
+        })
+    return results
+
+
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
