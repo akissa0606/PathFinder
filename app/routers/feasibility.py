@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db import get_db
 from app.engine.feasibility import calculate_feasibility
+from app.models import FeasibilityResponse, FeasibilityResult
 from app.services.osrm import get_distance_matrix
 
 logger = logging.getLogger(__name__)
@@ -15,14 +16,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-@router.get("/trips/{trip_id}/feasibility")
+@router.get("/trips/{trip_id}/feasibility", response_model=FeasibilityResponse)
 async def get_feasibility(
     trip_id: str,
     lat: float | None = Query(None),
     lon: float | None = Query(None),
     time_override: str | None = Query(None, alias="time"),
     db: aiosqlite.Connection = Depends(get_db),
-) -> dict:
+) -> FeasibilityResponse:
     """
     Compute feasibility for all pending places in a trip.
 
@@ -63,11 +64,11 @@ async def get_feasibility(
     places = [dict(r) for r in await cursor.fetchall()]
 
     if not places:
-        return {
-            "current_time": current_time.isoformat(),
-            "remaining_minutes": round(remaining_minutes, 1),
-            "places": [],
-        }
+        return FeasibilityResponse(
+            current_time=current_time.isoformat(),
+            remaining_minutes=round(remaining_minutes, 1),
+            places=[],
+        )
 
     # Build coordinate list: [current_position] + [all places] + [endpoint]
     coords = [[cur_lon, cur_lat]]
@@ -81,7 +82,7 @@ async def get_feasibility(
     # Index 0 = current position, 1..N = places, N+1 = endpoint
     endpoint_idx = len(places) + 1
 
-    results = []
+    results: list[FeasibilityResult] = []
     for i, place in enumerate(places):
         place_idx = i + 1
         travel_to_place = matrix[0][place_idx]
@@ -95,10 +96,10 @@ async def get_feasibility(
             trip_end_time=trip_end_dt,
             trip_date=trip_date,
         )
-        results.append(result)
+        results.append(FeasibilityResult(**result))
 
-    return {
-        "current_time": current_time.isoformat(),
-        "remaining_minutes": round(remaining_minutes, 1),
-        "places": results,
-    }
+    return FeasibilityResponse(
+        current_time=current_time.isoformat(),
+        remaining_minutes=round(remaining_minutes, 1),
+        places=results,
+    )

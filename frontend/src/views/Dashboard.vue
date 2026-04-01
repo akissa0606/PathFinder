@@ -70,6 +70,7 @@ const searchQuery = ref('')
 const searchResults = ref([])
 const searching = ref(false)
 const loadError = ref('')
+const actionError = ref('')
 const feasibility = ref(new Map())
 const userLat = ref(null)
 const userLon = ref(null)
@@ -259,35 +260,38 @@ async function handleAddPlace(result) {
     await loadTrip()
     await loadFeasibility()
   } catch (e) {
-    // silently fail
+    actionError.value = `Failed to add place: ${e.message}`
   }
 }
 
 async function handleDeletePlace(placeId) {
   try {
+    actionError.value = ''
     await deletePlace(tripId, placeId)
     await loadTrip()
     await loadFeasibility()
   } catch (e) {
-    // silently fail
+    actionError.value = `Failed to delete place: ${e.message}`
   }
 }
 
 async function handlePriorityChange(place, newPriority) {
   try {
+    actionError.value = ''
     await updatePlace(tripId, place.id, { priority: newPriority })
     place.priority = newPriority
   } catch (e) {
-    // silently fail
+    actionError.value = `Failed to update priority: ${e.message}`
   }
 }
 
 async function handleDurationChange(place, newDuration) {
   try {
+    actionError.value = ''
     await updatePlace(tripId, place.id, { duration: parseInt(newDuration) || 30 })
     place.duration = parseInt(newDuration) || 30
   } catch (e) {
-    // silently fail
+    actionError.value = `Failed to update duration: ${e.message}`
   }
 }
 
@@ -341,6 +345,7 @@ onUnmounted(() => {
 
     <div class="sidebar">
       <div v-if="loadError" class="error">{{ loadError }}</div>
+      <div v-if="actionError" class="error" @click="actionError = ''">{{ actionError }} <small>(click to dismiss)</small></div>
 
       <div v-if="trip" class="trip-header">
         <h2>{{ trip.city }}</h2>

@@ -1,4 +1,10 @@
-"""Google Places API service — fetches opening hours via Text Search."""
+"""Google Places API service — fetches opening hours via Text Search.
+
+This is an *optional* fallback used only when Overpass (OSM) returns no
+opening hours data. It requires GOOGLE_PLACES_API_KEY to be set in .env;
+if the key is absent the function returns None immediately and the app
+continues without it.
+"""
 
 import logging
 

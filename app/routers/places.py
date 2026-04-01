@@ -71,8 +71,11 @@ async def _cache_distances_background(
 
             # Cache all pairs involving the new place
             new_idx = next(
-                i for i, p in enumerate(all_places) if p["id"] == place_id
+                (i for i, p in enumerate(all_places) if p["id"] == place_id), None
             )
+            if new_idx is None:
+                logger.warning("Place %d not found in all_places; skipping cache", place_id)
+                return
 
             for i, p in enumerate(all_places):
                 if i == new_idx:
@@ -201,7 +204,11 @@ async def update_place(
     if not row:
         raise HTTPException(status_code=404, detail="Place not found")
 
-    updates = body.model_dump(exclude_none=True)
+    ALLOWED_COLUMNS = {"priority", "estimated_duration_min", "opening_hours", "opening_hours_source"}
+    updates = {
+        k: v for k, v in body.model_dump(exclude_none=True).items()
+        if k in ALLOWED_COLUMNS
+    }
     if not updates:
         return PlaceResponse(**dict(row))
 

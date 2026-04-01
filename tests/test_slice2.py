@@ -57,29 +57,20 @@ def test_feasibility_green():
 
 
 def test_feasibility_red_closing_soon():
-    """Place closing in 20 minutes -> red (window_remaining < 30 min)."""
+    """Place closing in < 30 min -> red (window_remaining < 30 min)."""
     current = datetime(2026, 4, 15, 17, 42)
-    result = calculate_feasibility(
-        place=make_place(opening_hours="Mo-Su 09:00-18:00"),
-        travel_to_place_seconds=60,        # 1 min
-        travel_to_endpoint_seconds=60,      # 1 min
-        current_time=current,
-        trip_end_time=TRIP_END,
-        trip_date=TRIP_DATE,
-    )
-    # window_remaining = 18:00 - 17:42 = 18 min < 30 min
-    # But also need slack >= 0. Visit = 90 min museum, that exceeds remaining.
-    # Use a short-duration category instead.
+    # Use viewpoint (15 min visit) so there's enough time to actually visit.
+    # A museum (90 min) would be gray (impossible) at this point.
     result = calculate_feasibility(
         place=make_place(category="viewpoint", opening_hours="Mo-Su 09:00-18:00"),
-        travel_to_place_seconds=60,
-        travel_to_endpoint_seconds=60,
+        travel_to_place_seconds=60,        # 1 min
+        travel_to_endpoint_seconds=60,     # 1 min
         current_time=current,
         trip_end_time=TRIP_END,
         trip_date=TRIP_DATE,
     )
     # viewpoint = 15 min. arrival=17:43, depart=17:58, finish=17:59
-    # slack = 18:00 - 17:59 = 1 min >= 0
+    # slack = 18:00 - 17:59 = 1 min >= 0 (not gray)
     # window_remaining = 18:00 - 17:42 = 18 min < 30 min -> red
     assert result["color"] == "red"
     assert "Closes in" in result["reason"]

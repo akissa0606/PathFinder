@@ -38,11 +38,23 @@ app/
   ├── db.py              # SQLite schema + init
   ├── models.py          # Pydantic request/response schemas
   ├── main.py            # FastAPI app + lifespan
+  ├── routers/
+  │   ├── trips.py       # Trip CRUD (/api/trips)
+  │   ├── places.py      # Place CRUD (/api/trips/{id}/places)
+  │   ├── search.py      # POI search + geocode (/api/search, /api/geocode)
+  │   └── feasibility.py # Feasibility scoring (/api/trips/{id}/feasibility)
+  ├── engine/
+  │   ├── feasibility.py      # Core feasibility algorithm
+  │   └── category_defaults.py # Default visit durations per category
   └── services/
-      ├── osrm.py        # OSRM HTTP client (foot/car/bicycle)
-      └── nominatim.py   # (v1 carryover, status TBD)
+      ├── osrm.py              # OSRM HTTP client (foot/car/bicycle)
+      ├── overpass.py          # Opening hours via Overpass API (OSM)
+      ├── hours.py             # Hours resolver (Overpass → Google fallback)
+      └── google_places.py     # Google Places opening hours fallback (optional)
 tests/
-  └── test_infrastructure.py  # DB, OSRM, schema tests
+  ├── test_infrastructure.py  # DB, OSRM, schema tests (Slice 0)
+  ├── test_slice1.py          # Trip/Place CRUD endpoint tests (Slice 1)
+  └── test_slice2.py          # Feasibility engine unit + integration tests (Slice 2)
 ```
 
 ## Development Workflow
@@ -62,7 +74,7 @@ pytest tests/ -v
 pytest tests/test_infrastructure.py -v
 
 # Run one test
-pytest tests/test_infrastructure.py::test_osrm_foot_connectivity -v
+pytest tests/test_infrastructure.py::test_osrm_foot_responds -v
 ```
 
 ### 3. Verification
@@ -151,13 +163,14 @@ GOOGLE_PLACES_API_KEY=AIzaSy...
 DATABASE_PATH=./data/pathfinder.db
 ```
 
-## Known Limitations (Slice 0)
+## Known Limitations
 
 | Issue | Impact | Mitigation |
 |-------|--------|-----------|
-| `get_db()` is bare connection | Will leak resources in Slice 1 routes | Will refactor to async generator dependency |
-| Static mount at `/` may shadow `/health` | Health check may fail once frontend is built | Will move frontend to `/app` path |
-| OSRM containers have no health checks | Startup race conditions if app and OSRM in same compose | Manually verify OSRM with curl before testing |
+| Static mount at `/` may shadow `/health` | Health check may fail if a route is matched by the static file handler | `/health` is registered before the static mount so FastAPI handles it first |
+| OSRM containers have no health checks | Startup race conditions if app and OSRM start together | Manually verify OSRM with curl before testing |
+| Nominatim has no rate-limit guard | Heavy usage may trigger 429s from the public instance | Cache geocode results or self-host Nominatim |
+| All times assumed in user's local timezone | UTC offset not stored; feasibility scoring is timezone-naive | Document assumption in API; add timezone field in a future slice |
 
 ## Debugging
 

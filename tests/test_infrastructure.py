@@ -7,14 +7,10 @@ Covers:
 - OSRM connectivity (foot profile, self-hosted or public fallback)
 """
 
-import os
 import pytest
 import pytest_asyncio
 import aiosqlite
 import httpx
-
-# Use a temp DB for tests so we don't pollute the real one
-TEST_DB = "/tmp/pathfinder_test.db"
 
 
 # ---------------------------------------------------------------------------
@@ -23,27 +19,20 @@ TEST_DB = "/tmp/pathfinder_test.db"
 
 
 @pytest_asyncio.fixture
-async def db():
-    """Fresh in-memory-ish DB for each test."""
-    if os.path.exists(TEST_DB):
-        os.remove(TEST_DB)
+async def db(tmp_path):
+    """Fresh temporary DB for each test."""
+    test_db = str(tmp_path / "test.db")
 
-    # Monkeypatch settings before importing db
     import app.config as cfg
-
-    cfg.settings.database_path = TEST_DB
+    cfg.settings.database_path = test_db
 
     from app.db import init_db
-
     await init_db()
 
-    conn = await aiosqlite.connect(TEST_DB)
+    conn = await aiosqlite.connect(test_db)
     conn.row_factory = aiosqlite.Row
     yield conn
     await conn.close()
-
-    if os.path.exists(TEST_DB):
-        os.remove(TEST_DB)
 
 
 # ---------------------------------------------------------------------------

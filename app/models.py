@@ -97,14 +97,9 @@ class TripDetailResponse(TripResponse):
     places: list[PlaceResponse] = []
 
 
-# ---------------------------------------------------------------------------
-# Check-in
-# ---------------------------------------------------------------------------
-
-
-class CheckInRequest(BaseModel):
-    place_id: int
-    action: Literal["arrived", "done", "skipped"]
+class TripCreatedResponse(BaseModel):
+    id: str
+    url: str
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +113,12 @@ class FeasibilityResult(BaseModel):
     slack_minutes: float
     closing_urgency_minutes: float | None
     reason: str
+
+
+class FeasibilityResponse(BaseModel):
+    current_time: str
+    remaining_minutes: float
+    places: list[FeasibilityResult]
 
 
 # ---------------------------------------------------------------------------

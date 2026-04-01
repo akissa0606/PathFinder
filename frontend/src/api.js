@@ -1,22 +1,30 @@
+async function _json(res) {
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`)
+  }
+  return res.json()
+}
+
 export async function createTrip(data) {
   const res = await fetch('/api/trips', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-  return res.json()
+  return _json(res)
 }
 
 export async function getTrip(id) {
   const res = await fetch(`/api/trips/${id}`)
-  return res.json()
+  return _json(res)
 }
 
 export async function searchPlaces(query, lat, lon) {
   const res = await fetch(
     `/api/search?q=${encodeURIComponent(query)}&lat=${lat}&lon=${lon}`
   )
-  return res.json()
+  return _json(res)
 }
 
 export async function addPlace(tripId, place) {
@@ -25,11 +33,15 @@ export async function addPlace(tripId, place) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(place),
   })
-  return res.json()
+  return _json(res)
 }
 
 export async function deletePlace(tripId, placeId) {
-  await fetch(`/api/trips/${tripId}/places/${placeId}`, { method: 'DELETE' })
+  const res = await fetch(`/api/trips/${tripId}/places/${placeId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`)
+  }
 }
 
 export async function updatePlace(tripId, placeId, data) {
@@ -38,12 +50,12 @@ export async function updatePlace(tripId, placeId, data) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-  return res.json()
+  return _json(res)
 }
 
 export async function geocode(query) {
   const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`)
-  return res.json()
+  return _json(res)
 }
 
 export async function getFeasibility(tripId, lat, lon) {
@@ -53,5 +65,5 @@ export async function getFeasibility(tripId, lat, lon) {
     params.set('lon', lon)
   }
   const res = await fetch(`/api/trips/${tripId}/feasibility?${params}`)
-  return res.json()
+  return _json(res)
 }

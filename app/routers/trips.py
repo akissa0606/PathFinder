@@ -8,17 +8,17 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
-from app.models import PlaceResponse, TripCreate, TripDetailResponse, TripResponse, TripUpdate
+from app.models import PlaceResponse, TripCreate, TripCreatedResponse, TripDetailResponse, TripResponse, TripUpdate
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
 
-@router.post("/trips", response_model=dict, status_code=201)
+@router.post("/trips", response_model=TripCreatedResponse, status_code=201)
 async def create_trip(
     body: TripCreate, db: aiosqlite.Connection = Depends(get_db)
-) -> dict:
+) -> TripCreatedResponse:
     trip_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
@@ -42,7 +42,7 @@ async def create_trip(
         ),
     )
     await db.commit()
-    return {"id": trip_id, "url": f"/api/trips/{trip_id}"}
+    return TripCreatedResponse(id=trip_id, url=f"/api/trips/{trip_id}")
 
 
 @router.get("/trips/{trip_id}", response_model=TripDetailResponse)
@@ -76,7 +76,11 @@ async def update_trip(
     if not row:
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    updates = body.model_dump(exclude_none=True)
+    ALLOWED_COLUMNS = {"start_time", "end_time", "transport_mode"}
+    updates = {
+        k: v for k, v in body.model_dump(exclude_none=True).items()
+        if k in ALLOWED_COLUMNS
+    }
     if not updates:
         return TripResponse(**dict(row))
 

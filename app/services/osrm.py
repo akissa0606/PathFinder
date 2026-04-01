@@ -1,15 +1,4 @@
-"""
-このファイルは、OSRM (Open Source Routing Machine) を利用して、複数地点間の移動時間
-や実際のルート情報を取得するためのサービス層のコードである。主な役割は、アプリケーションから直接OSRM
-のAPIを扱うのではなく、その通信処理やレスポンスの整形、エラーハンドリングを一括して管理し、使いやすい
-形で提供することにある。get_distance_matrix 関数では、与えられた複数の座標に対して全組み
-合わせの移動時間（秒）を2次元配列として取得し、到達不可能な経路（null）については大きなペ
-ナルティ値に置き換えることで、後続の最適化アルゴリズムなどで扱いやすくしている。一方、
-get_route_geometry 関数では、指定された順序の座標列に従った実際の道路経路を取得し、
-地図ライブラリ（例：Leaflet）でそのまま描画できるように座標の順序（lon, lat から lat, lon）
-を変換して返す。また、徒歩・車・自転車といった移動手段ごとに異なるOSRMエンドポイントを切り替える仕組
-みを持ち、非同期HTTPクライアント（httpx）を用いることで効率的な通信を実現している。
-"""
+"""OSRM service — travel time matrix for foot/car/bicycle profiles."""
 
 from typing import cast
 
@@ -79,47 +68,14 @@ async def get_distance_matrix(
             if val is not None:
                 max_duration = max(max_duration, val)
 
-    penalty = max(max_duration * 2, 999999)
+    # Unreachable pairs get a penalty large enough to make any route through them
+    # cost-prohibitive. We use 2× the largest real duration as a dynamic floor,
+    # with a hard minimum of 999 999 s (~11.5 days) for sparse matrices where
+    # all real durations might be short.
+    penalty = max(max_duration * 2, 999_999)
 
     result: list[list[float]] = []
     for row in durations:
         result.append([(val if val is not None else penalty) for val in row])
 
     return result
-
-
-async def get_route_geometry(
-    coordinates: list[list[float]],
-    profile: str = "foot",
-) -> list[list[float]]:
-    """
-    Fetch actual path geometry for an ordered sequence of coordinates.
-
-    Args:
-        coordinates: Sequence of (longitude, latitude) pairs in visit order.
-        profile: Transport mode — "foot", "car", or "bicycle".
-
-    Returns:
-        List of [lat, lon] pairs (Leaflet order) tracing the road-snapped path.
-    """
-    if len(coordinates) < 2:
-        return []
-
-    coord_str = ";".join(f"{lon},{lat}" for lon, lat in coordinates)
-    url = f"{_base_url(profile)}/route/v1/{profile}/{coord_str}?overview=full&geometries=geojson"
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.json()
-
-    if data.get("code") != "Ok":
-        msg = data.get("message", "Unknown OSRM error")
-        raise ValueError(f"OSRM error: {msg}")
-
-    routes = data.get("routes", [])
-    if not routes:
-        raise ValueError("OSRM returned no routes")
-
-    geojson_coords = cast(list[list[float]], routes[0]["geometry"]["coordinates"])
-    return [[lat, lon] for lon, lat in geojson_coords]
