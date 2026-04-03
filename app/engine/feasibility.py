@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import date, datetime, time, timedelta
+from typing import Any
 
 from app.engine.category_defaults import get_duration_minutes
 
@@ -8,13 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_feasibility(
-    place: dict,
+    place: dict[str, Any],
     travel_to_place_seconds: float,
     travel_to_endpoint_seconds: float,
     current_time: datetime,
     trip_end_time: datetime,
     trip_date: date,
-) -> dict:
+) -> dict[str, Any]:
     """
     Calculate feasibility for a single place.
 
@@ -132,7 +133,7 @@ def parse_closing_time(opening_hours: str, trip_date: date) -> datetime | None:
     return None
 
 
-def _day_matches(day_part: str, weekday: int, day_map: dict) -> bool:
+def _day_matches(day_part: str, weekday: int, day_map: dict[str, int]) -> bool:
     """Check if weekday matches day specification like 'Mo-Fr', 'Sa,Su', 'Mo'."""
     segments = [s.strip() for s in day_part.split(",")]
     for seg in segments:

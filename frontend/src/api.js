@@ -58,6 +58,25 @@ export async function geocode(query) {
   return _json(res)
 }
 
+export async function checkinPlace(tripId, placeId, action) {
+  const res = await fetch(`/api/trips/${tripId}/checkin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ place_id: placeId, action }),
+  })
+  return _json(res)
+}
+
+export async function getNextRecommendation(tripId, lat, lon) {
+  const params = new URLSearchParams()
+  if (lat != null && lon != null) {
+    params.set('lat', lat)
+    params.set('lon', lon)
+  }
+  const res = await fetch(`/api/trips/${tripId}/next?${params}`)
+  return _json(res)
+}
+
 export async function getFeasibility(tripId, lat, lon) {
   const params = new URLSearchParams()
   if (lat != null && lon != null) {
@@ -66,4 +85,25 @@ export async function getFeasibility(tripId, lat, lon) {
   }
   const res = await fetch(`/api/trips/${tripId}/feasibility?${params}`)
   return _json(res)
+}
+
+/**
+ * Connect to the SSE stream for real-time feasibility updates and urgency alerts.
+ * Returns the EventSource instance — caller must call .close() on unmount.
+ */
+export function connectTripStream(tripId, lat, lon, { onFeasibilityUpdate, onUrgencyAlert, onError }) {
+  const params = new URLSearchParams()
+  if (lat != null) params.set('lat', lat)
+  if (lon != null) params.set('lon', lon)
+  const es = new EventSource(`/api/trips/${tripId}/stream?${params}`)
+
+  es.addEventListener('feasibility_update', (e) => {
+    try { onFeasibilityUpdate(JSON.parse(e.data)) } catch {}
+  })
+  es.addEventListener('urgency_alert', (e) => {
+    try { onUrgencyAlert(JSON.parse(e.data)) } catch {}
+  })
+  if (onError) es.onerror = onError
+
+  return es
 }

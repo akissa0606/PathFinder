@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import L from 'leaflet'
-import { getTrip, searchPlaces, addPlace, deletePlace, updatePlace, getFeasibility } from '../api.js'
+import { getTrip, searchPlaces, addPlace, deletePlace, updatePlace, getFeasibility, getNextRecommendation, checkinPlace, connectTripStream } from '../api.js'
 
 // Fix Leaflet default marker icon paths for bundled builds
 delete L.Icon.Default.prototype._getIconUrl
@@ -76,14 +76,21 @@ const userLat = ref(null)
 const userLon = ref(null)
 
 const settingPosition = ref(false)
+const checkinLoading = ref(false)
+const showArrivePicker = ref(false)
+const nextRecs = ref(null)       // { recommendations: [], message: '' }
+const nextLoading = ref(false)
+const nextSkipIndex = ref(0)     // which recommendation is "primary"
+const alerts = ref([])           // urgency alert banners
 
 let map = null
+let eventSource = null
 let markersLayer = null
 let searchMarkersLayer = null
 let userPositionMarker = null
 
 // Computed stats
-const visitedCount = computed(() => places.value.filter(p => p.status && p.status !== 'pending').length)
+const visitedCount = computed(() => places.value.filter(p => p.status === 'done' || p.status === 'visiting').length)
 const remainingCount = computed(() => places.value.filter(p => !p.status || p.status === 'pending').length)
 const reachableCount = computed(() => {
   return places.value.filter(p => {
@@ -102,6 +109,12 @@ const remainingMinutes = computed(() => {
   const diff = Math.max(0, Math.floor((end - now) / 60000))
   return diff
 })
+
+// Sectioned place lists
+const visitingPlace = computed(() => places.value.find(p => p.status === 'visiting') || null)
+const pendingPlaces = computed(() => places.value.filter(p => !p.status || p.status === 'pending'))
+const donePlaces = computed(() => places.value.filter(p => p.status === 'done'))
+const skippedPlaces = computed(() => places.value.filter(p => p.status === 'skipped'))
 
 const timeUsedPercent = computed(() => {
   if (!trip.value) return 0
@@ -150,12 +163,8 @@ async function loadFeasibility() {
   try {
     const data = await getFeasibility(tripId, lat, lon)
     const m = new Map()
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        m.set(item.place_id, item)
-      }
-    } else if (data && Array.isArray(data.results)) {
-      for (const item of data.results) {
+    if (data && Array.isArray(data.places)) {
+      for (const item of data.places) {
         m.set(item.place_id, item)
       }
     }
@@ -237,7 +246,7 @@ async function doSearch() {
   searching.value = true
   try {
     const results = await searchPlaces(searchQuery.value, trip.value.start_lat, trip.value.start_lon)
-    searchResults.value = Array.isArray(results) ? results : results.results || []
+    searchResults.value = Array.isArray(results) ? results : []
     updateSearchMarkers()
   } catch (e) {
     searchResults.value = []
@@ -252,8 +261,8 @@ async function handleAddPlace(result) {
       name: result.name,
       lat: result.lat,
       lon: result.lon,
-      category: result.category || '',
-      opening_hours: result.opening_hours || '',
+      category: result.category || null,
+      opening_hours: result.opening_hours || null,
     })
     searchResults.value = searchResults.value.filter((r) => r !== result)
     updateSearchMarkers()
@@ -288,10 +297,111 @@ async function handlePriorityChange(place, newPriority) {
 async function handleDurationChange(place, newDuration) {
   try {
     actionError.value = ''
-    await updatePlace(tripId, place.id, { duration: parseInt(newDuration) || 30 })
-    place.duration = parseInt(newDuration) || 30
+    await updatePlace(tripId, place.id, { estimated_duration_min: parseInt(newDuration) || 30 })
+    place.estimated_duration_min = parseInt(newDuration) || 30
   } catch (e) {
     actionError.value = `Failed to update duration: ${e.message}`
+  }
+}
+
+async function askWhatNext() {
+  if (!trip.value) return
+  nextLoading.value = true
+  nextSkipIndex.value = 0
+  try {
+    const lat = userLat.value ?? trip.value.start_lat
+    const lon = userLon.value ?? trip.value.start_lon
+    nextRecs.value = await getNextRecommendation(tripId, lat, lon)
+    // Highlight top recommendation on map
+    highlightRecommendation()
+  } catch (e) {
+    actionError.value = `What Next? failed: ${e.message}`
+    nextRecs.value = null
+  } finally {
+    nextLoading.value = false
+  }
+}
+
+function skipRecommendation() {
+  if (!nextRecs.value) return
+  const recs = nextRecs.value.recommendations || []
+  if (nextSkipIndex.value < recs.length - 1) {
+    nextSkipIndex.value++
+    highlightRecommendation()
+  } else {
+    // No more alternatives
+    nextRecs.value = null
+  }
+}
+
+function navigateToPlace(rec) {
+  // Find place coords
+  const place = places.value.find(p => p.id === rec.place_id)
+  if (!place) return
+  const lat = place.lat
+  const lon = place.lon
+  // Open Google Maps directions in new tab
+  const origin = userLat.value != null
+    ? `${userLat.value},${userLon.value}`
+    : `${trip.value.start_lat},${trip.value.start_lon}`
+  window.open(
+    `https://www.google.com/maps/dir/${origin}/${lat},${lon}`,
+    '_blank'
+  )
+}
+
+let highlightMarker = null
+function highlightRecommendation() {
+  if (highlightMarker && map) {
+    map.removeLayer(highlightMarker)
+    highlightMarker = null
+  }
+  if (!nextRecs.value || !map) return
+  const recs = nextRecs.value.recommendations || []
+  const rec = recs[nextSkipIndex.value]
+  if (!rec) return
+  const place = places.value.find(p => p.id === rec.place_id)
+  if (!place) return
+  highlightMarker = L.circleMarker([place.lat, place.lon], {
+    radius: 18,
+    color: '#f59e0b',
+    fillColor: '#f59e0b',
+    fillOpacity: 0.3,
+    weight: 3,
+    className: 'rec-pulse',
+  }).addTo(map)
+  map.setView([place.lat, place.lon], 15)
+}
+
+async function handleCheckin(placeId, action) {
+  try {
+    checkinLoading.value = true
+    actionError.value = ''
+    await checkinPlace(tripId, placeId, action)
+    showArrivePicker.value = false
+    await loadTrip()
+    await loadFeasibility()
+  } catch (e) {
+    actionError.value = `Check-in failed: ${e.message}`
+  } finally {
+    checkinLoading.value = false
+  }
+}
+
+function sortedByDistance(placeList) {
+  if (userLat.value == null || userLon.value == null) return placeList
+  return [...placeList].sort((a, b) => {
+    const dA = (a.lat - userLat.value) ** 2 + (a.lon - userLon.value) ** 2
+    const dB = (b.lat - userLat.value) ** 2 + (b.lon - userLon.value) ** 2
+    return dA - dB
+  })
+}
+
+function dismissNextCard() {
+  nextRecs.value = null
+  if (highlightMarker && map) {
+    map.removeLayer(highlightMarker)
+    highlightMarker = null
   }
 }
 
@@ -299,6 +409,43 @@ function handleVisibilityChange() {
   if (document.visibilityState === 'visible' && trip.value) {
     loadFeasibility()
   }
+}
+
+function connectStream() {
+  if (eventSource) eventSource.close()
+  const lat = userLat.value ?? trip.value?.start_lat
+  const lon = userLon.value ?? trip.value?.start_lon
+  eventSource = connectTripStream(tripId, lat, lon, {
+    onFeasibilityUpdate(data) {
+      const m = new Map()
+      if (data && Array.isArray(data.places)) {
+        for (const item of data.places) {
+          m.set(item.place_id, item)
+        }
+      }
+      feasibility.value = m
+      updateMapMarkers()
+    },
+    onUrgencyAlert(alert) {
+      const id = Date.now() + Math.random()
+      alerts.value.push({ id, ...alert })
+      // Keep max 5 visible
+      if (alerts.value.length > 5) alerts.value.shift()
+      // Auto-dismiss after 30s
+      setTimeout(() => dismissAlert(id), 30000)
+    },
+    onError() {
+      // EventSource will auto-reconnect
+    },
+  })
+}
+
+function dismissAlert(id) {
+  alerts.value = alerts.value.filter(a => a.id !== id)
+}
+
+function reconnectStream() {
+  if (trip.value) connectStream()
 }
 
 onMounted(async () => {
@@ -313,21 +460,25 @@ onMounted(async () => {
         userLon.value = pos.coords.longitude
         updateUserPositionMarker(pos.coords.latitude, pos.coords.longitude)
         loadFeasibility()
+        connectStream()
       },
       () => {
         // Denied or error — use trip start as fallback
         loadFeasibility()
+        connectStream()
       },
       { timeout: 5000 }
     )
   } else {
     loadFeasibility()
+    connectStream()
   }
 
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onUnmounted(() => {
+  if (eventSource) { eventSource.close(); eventSource = null }
   if (map) {
     map.remove()
     map = null
@@ -344,12 +495,20 @@ onUnmounted(() => {
     </div>
 
     <div class="sidebar">
+      <!-- Urgency alert banners -->
+      <div v-for="a in alerts" :key="a.id"
+           :class="['alert-banner', a.severity]"
+           @click="dismissAlert(a.id)">
+        <strong>{{ a.place_name }}:</strong> {{ a.message }}
+        <span class="alert-dismiss">&times;</span>
+      </div>
+
       <div v-if="loadError" class="error">{{ loadError }}</div>
       <div v-if="actionError" class="error" @click="actionError = ''">{{ actionError }} <small>(click to dismiss)</small></div>
 
       <div v-if="trip" class="trip-header">
         <h2>{{ trip.city }}</h2>
-        <p>{{ trip.date }} &middot; {{ trip.start_time }}&ndash;{{ trip.end_time }} &middot; {{ trip.transport }}</p>
+        <p>{{ trip.date }} &middot; {{ trip.start_time }}&ndash;{{ trip.end_time }} &middot; {{ trip.transport_mode }}</p>
       </div>
 
       <div v-if="trip" class="time-budget">
@@ -365,7 +524,52 @@ onUnmounted(() => {
           :class="['btn', 'btn-small', settingPosition ? 'btn-active' : '']"
           @click="settingPosition = !settingPosition"
         >{{ settingPosition ? 'Click map...' : 'Set position' }}</button>
-        <button class="btn btn-small btn-refresh" @click="loadFeasibility">Refresh</button>
+        <button class="btn btn-small btn-refresh" @click="() => { loadFeasibility(); reconnectStream() }">Refresh</button>
+      </div>
+
+      <!-- What Next? -->
+      <div class="next-section">
+        <button
+          class="btn btn-next"
+          @click="askWhatNext"
+          :disabled="nextLoading || !pendingPlaces.length"
+          :title="pendingPlaces.length ? '' : 'Add places to enable recommendations'"
+        >
+          {{ nextLoading ? 'Thinking...' : (pendingPlaces.length ? 'What Next?' : 'No places') }}
+        </button>
+        <p v-if="!pendingPlaces.length" class="next-helper">No pending places — add some to get recommendations.</p>
+
+        <div v-if="nextRecs" class="next-card">
+          <button class="next-dismiss" @click="dismissNextCard">&times;</button>
+
+          <template v-if="nextRecs.recommendations && nextRecs.recommendations.length">
+            <div class="next-primary">
+              <div class="next-arrow">&rarr;</div>
+              <div class="next-details">
+                <strong>{{ nextRecs.recommendations[nextSkipIndex]?.place_name }}</strong>
+                <span class="next-travel">{{ nextRecs.recommendations[nextSkipIndex]?.travel_minutes }} min {{ trip?.transport_mode || 'walk' }}</span>
+                <span class="next-reason">{{ nextRecs.recommendations[nextSkipIndex]?.reason }}</span>
+              </div>
+              <div class="next-actions">
+                <button class="btn btn-primary btn-small" @click="navigateToPlace(nextRecs.recommendations[nextSkipIndex])">Navigate</button>
+                <button class="btn btn-small" @click="skipRecommendation">Skip</button>
+              </div>
+            </div>
+
+            <div v-if="nextRecs.recommendations.length > 1" class="next-alts">
+              <span class="next-alts-label">Also good:</span>
+              <div v-for="(alt, i) in nextRecs.recommendations" :key="alt.place_id">
+                <span v-if="i !== nextSkipIndex" class="next-alt-item">
+                  {{ alt.place_name }} &mdash; {{ alt.travel_minutes }} min, {{ alt.reason }}
+                </span>
+              </div>
+            </div>
+          </template>
+
+          <div v-else class="next-empty">
+            {{ nextRecs.message || 'No reachable places. Head to your endpoint.' }}
+          </div>
+        </div>
       </div>
 
       <div class="search-section">
@@ -387,11 +591,61 @@ onUnmounted(() => {
         </ul>
       </div>
 
-      <div class="places-section">
-        <h3>Places ({{ places.length }})</h3>
-        <p v-if="!places.length" class="empty">No places added yet. Search and add some.</p>
+      <!-- Check-in actions -->
+      <div v-if="trip" class="checkin-actions">
+        <button
+          v-if="!visitingPlace"
+          class="btn btn-checkin btn-arrive"
+          :disabled="checkinLoading || !pendingPlaces.length"
+          @click="showArrivePicker = !showArrivePicker"
+        >
+          {{ showArrivePicker ? 'Cancel' : 'I arrived somewhere' }}
+        </button>
+        <button
+          v-if="visitingPlace"
+          class="btn btn-checkin btn-done"
+          :disabled="checkinLoading"
+          @click="handleCheckin(visitingPlace.id, 'done')"
+        >
+          Done visiting {{ visitingPlace.name }}
+        </button>
+
+        <!-- Arrive picker -->
+        <div v-if="showArrivePicker" class="arrive-picker">
+          <p class="picker-label">Where did you arrive?</p>
+          <ul class="picker-list">
+            <li
+              v-for="p in sortedByDistance(pendingPlaces)"
+              :key="p.id"
+              class="picker-item"
+              @click="handleCheckin(p.id, 'arrived')"
+            >
+              <span class="feas-dot" :style="{ color: feasColorCss(p.id) }">&#9679;</span>
+              {{ p.name }}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Now Visiting -->
+      <div v-if="visitingPlace" class="place-section">
+        <h3 class="section-title section-visiting">Now Visiting</h3>
+        <div class="place-item place-visiting">
+          <div class="place-info">
+            <span class="feas-dot" style="color: #3b82f6;">&#9679;</span>
+            <strong>{{ visitingPlace.name }}</strong>
+            <span v-if="visitingPlace.category" class="category">{{ visitingPlace.category }}</span>
+            <span class="visiting-since">Since {{ new Date(visitingPlace.arrived_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Remaining (pending) -->
+      <div class="place-section">
+        <h3 class="section-title">Remaining ({{ pendingPlaces.length }})</h3>
+        <p v-if="!pendingPlaces.length && !donePlaces.length && !skippedPlaces.length" class="empty">No places added yet. Search and add some.</p>
         <ul class="place-list">
-          <li v-for="p in places" :key="p.id" class="place-item">
+          <li v-for="p in pendingPlaces" :key="p.id" class="place-item">
             <div class="place-info">
               <span class="feas-dot" :style="{ color: feasColorCss(p.id) }">&#9679;</span>
               <strong>{{ p.name }}</strong>
@@ -407,7 +661,7 @@ onUnmounted(() => {
               </select>
               <input
                 type="number"
-                :value="p.duration || 30"
+                :value="p.estimated_duration_min || 30"
                 min="5"
                 step="5"
                 class="duration-input"
@@ -415,7 +669,36 @@ onUnmounted(() => {
                 @blur="handleDurationChange(p, $event.target.value)"
               />
               <span class="duration-label">min</span>
+              <button class="btn btn-small btn-skip" @click="handleCheckin(p.id, 'skipped')" :disabled="checkinLoading">Skip</button>
               <button class="btn btn-danger btn-small" @click="handleDeletePlace(p.id)">Remove</button>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Completed -->
+      <div v-if="donePlaces.length" class="place-section">
+        <h3 class="section-title section-done">Completed ({{ donePlaces.length }})</h3>
+        <ul class="place-list">
+          <li v-for="p in donePlaces" :key="p.id" class="place-item place-done">
+            <div class="place-info">
+              <span class="feas-dot" style="color: #22c55e;">&#10003;</span>
+              <strong>{{ p.name }}</strong>
+              <span v-if="p.category" class="category">{{ p.category }}</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Skipped -->
+      <div v-if="skippedPlaces.length" class="place-section">
+        <h3 class="section-title section-skipped">Skipped ({{ skippedPlaces.length }})</h3>
+        <ul class="place-list">
+          <li v-for="p in skippedPlaces" :key="p.id" class="place-item place-skipped">
+            <div class="place-info">
+              <span class="feas-dot" style="color: #9ca3af;">&#10005;</span>
+              <strong>{{ p.name }}</strong>
+              <span v-if="p.category" class="category">{{ p.category }}</span>
             </div>
           </li>
         </ul>
@@ -546,11 +829,6 @@ onUnmounted(() => {
   color: var(--text);
 }
 
-.places-section h3 {
-  margin: 0;
-  color: var(--text-h);
-}
-
 .empty {
   font-size: 14px;
   color: var(--text);
@@ -624,6 +902,124 @@ onUnmounted(() => {
 .btn-active {
   background: #3b82f6 !important;
   color: #fff !important;
+}
+
+.btn-next {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  background: #f59e0b;
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-next:hover { background: #d97706; }
+.btn-next:disabled { opacity: 0.6; cursor: wait; }
+
+.next-card {
+  position: relative;
+  border: 2px solid #f59e0b;
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--bg);
+}
+
+.next-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.next-primary {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.next-arrow {
+  font-size: 24px;
+  color: #f59e0b;
+  font-weight: bold;
+  padding-top: 2px;
+}
+
+.next-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.next-details strong { color: var(--text-h); font-size: 15px; }
+.next-travel { font-size: 13px; color: var(--text); }
+.next-reason { font-size: 12px; color: var(--text); font-style: italic; }
+
+.next-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.next-alts {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.next-alts-label { font-weight: 600; color: var(--text-h); display: block; margin-bottom: 4px; }
+.next-alt-item { display: block; color: var(--text); padding: 2px 0; }
+
+.next-empty {
+  font-size: 14px;
+  color: var(--text);
+  text-align: center;
+  padding: 8px 0;
+}
+
+.rec-pulse {
+  animation: pulse-ring 1.5s ease-out infinite;
+}
+@keyframes pulse-ring {
+  0% { opacity: 1; }
+  100% { opacity: 0.3; }
+}
+
+.alert-banner {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  animation: alert-slide-in 0.3s ease;
+}
+.alert-banner.warning {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+}
+.alert-banner.critical {
+  background: #fee2e2;
+  border: 1px solid #ef4444;
+  color: #991b1b;
+}
+.alert-dismiss {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: bold;
+  opacity: 0.6;
+}
+@keyframes alert-slide-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .error {

@@ -184,7 +184,7 @@ async function submit() {
       date: date.value,
       start_time: startTime.value,
       end_time: endTime.value,
-      transport: transport.value,
+      transport_mode: transport.value,
       start_lat: parseFloat(startLat.value),
       start_lon: parseFloat(startLon.value),
       end_lat: parseFloat(eLat),

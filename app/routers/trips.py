@@ -21,7 +21,7 @@ async def create_trip(
 ) -> TripCreatedResponse:
     trip_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    await db.execute(
+    _ = await db.execute(
         """INSERT INTO trips
            (id, city, start_lat, start_lon, end_lat, end_lon,
             start_time, end_time, date, transport_mode, created_at, updated_at)
@@ -88,7 +88,7 @@ async def update_trip(
     updates["updated_at"] = now
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     values = list(updates.values()) + [trip_id]
-    await db.execute(f"UPDATE trips SET {set_clause} WHERE id = ?", values)
+    _ = await db.execute(f"UPDATE trips SET {set_clause} WHERE id = ?", values)
     await db.commit()
 
     cursor = await db.execute("SELECT * FROM trips WHERE id = ?", (trip_id,))
@@ -106,7 +106,7 @@ async def delete_trip(
     if not await cursor.fetchone():
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
-    await db.execute("DELETE FROM places WHERE trip_id = ?", (trip_id,))
-    await db.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
+    _ = await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
+    _ = await db.execute("DELETE FROM places WHERE trip_id = ?", (trip_id,))
+    _ = await db.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
     await db.commit()

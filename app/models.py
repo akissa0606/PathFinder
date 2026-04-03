@@ -1,15 +1,4 @@
-"""
-このファイルは、Pydantic を用いてAPIのリクエストおよびレスポンスのデータ構造
-を定義するモデル群を提供するものであり、アプリケーションにおけるデータの入出力
-仕様を明確にする役割を持つ。Trip（旅行計画）、Place（訪問地点）、
-Check-in（到着・完了などの状態更新）、Feasibility（訪問可能性評価）
-、NextRecommendation（次の訪問候補）といった各ドメインごとにモデルが分かれており、
-それぞれ入力用（Create/Update）と出力用（Response）を分離することで安全かつ
-柔軟なAPI設計を実現している。また、Literal 型を用いて取り得る値を制限することで、
-transport_modeやpriorityなどのフィールドに対してバリデーションが自動的に行われる。
-このファイルにより、APIの契約（スキーマ）が明確化され、フロントエンドや他サー
-ビスとの連携が容易になるとともに、データの一貫性と信頼性が向上している。
-"""
+"""Pydantic request/response models for the PathFinder API."""
 
 from typing import Literal
 
@@ -121,6 +110,31 @@ class FeasibilityResponse(BaseModel):
     places: list[FeasibilityResult]
 
 
+class UrgencyAlert(BaseModel):
+    place_id: int
+    place_name: str
+    message: str
+    severity: Literal["warning", "critical"]
+
+
+# ---------------------------------------------------------------------------
+# Check-in
+# ---------------------------------------------------------------------------
+
+
+class CheckinRequest(BaseModel):
+    place_id: int
+    action: Literal["arrived", "done", "skipped"]
+
+
+class CheckinResponse(BaseModel):
+    place_id: int
+    status: str
+    arrived_at: str | None
+    departed_at: str | None
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Next recommendation
 # ---------------------------------------------------------------------------
@@ -133,3 +147,8 @@ class NextRecommendation(BaseModel):
     opportunity_cost: int
     travel_minutes: float
     reason: str
+
+
+class NextResponse(BaseModel):
+    recommendations: list[NextRecommendation]
+    message: str | None = None

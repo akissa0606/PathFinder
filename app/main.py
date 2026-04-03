@@ -1,15 +1,4 @@
-"""
-このファイルは、FastAPI を用いてアプリケーション全体のエントリーポイントを定義し、
-APIサーバーの初期化と基本的なルーティングを設定する役割を持つ。アプリケーション
-起動時には lifespan コンテキストマネージャを通じてデータベースの初期化
-（init_db）が実行され、必要なテーブルが自動的に準備される仕組みになっている。
-また、/health エンドポイントを提供することでサービスの稼働状態を簡易的に確認
-できるようにしている。さらに、ビルド済みのフロントエンド（frontend/dist）
-が存在する場合には、それを静的ファイルとしてルートパスにマウントし、バックエンドと
-フロントエンドを単一のサーバーで配信できる構成となっている。このように本ファイルは、
-アプリケーションの起動処理、ヘルスチェック、およびフロントエンド配信を統合的に管理
-する中核的な役割を担っている。
-"""
+"""FastAPI application entry point."""
 
 import os
 from contextlib import asynccontextmanager
@@ -18,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db
-from app.routers import feasibility, places, search, trips
+from app.routers import checkin, feasibility, next_action, places, search, stream, trips
 
 
 @asynccontextmanager
@@ -33,6 +22,9 @@ app.include_router(trips.router)
 app.include_router(places.router)
 app.include_router(search.router)
 app.include_router(feasibility.router)
+app.include_router(next_action.router)
+app.include_router(checkin.router)
+app.include_router(stream.router)
 
 
 @app.get("/health")
