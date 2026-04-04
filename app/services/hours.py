@@ -1,6 +1,7 @@
 """Opening hours resolution — OSM first, Google Places fallback."""
 
 import logging
+from typing import cast
 
 from app.services import google_places, overpass
 
@@ -19,7 +20,8 @@ async def resolve_opening_hours(
     try:
         result = await overpass.get_opening_hours(lat, lon, name)
         if result and result.get("opening_hours"):
-            return result["opening_hours"], "osm"
+            hours: str = cast(str, result["opening_hours"])
+            return hours, "osm"
     except Exception:
         logger.exception("Overpass lookup failed for %s", name)
 

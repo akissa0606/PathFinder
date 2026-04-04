@@ -24,9 +24,11 @@ async def db(tmp_path):
     test_db = str(tmp_path / "test.db")
 
     import app.config as cfg
+
     cfg.settings.database_path = test_db
 
     from app.db import init_db
+
     await init_db()
 
     conn = await aiosqlite.connect(test_db)

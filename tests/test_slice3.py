@@ -58,8 +58,8 @@ def test_all_gray_returns_empty():
     places = [make_place(id=1, category="museum")]  # 90 min visit
     # Matrix: [current, place1, endpoint]
     matrix = [
-        [0, 3600, 0],      # 1 hour to place
-        [3600, 0, 3600],   # 1 hour back
+        [0, 3600, 0],  # 1 hour to place
+        [3600, 0, 3600],  # 1 hour back
         [0, 3600, 0],
     ]
     # current=17:00, end=18:00. travel(60)+visit(90)+travel(60) = 210 min > 60 min remaining
@@ -133,7 +133,7 @@ def test_closest_wins_when_equivalent():
     ]
     # Place 1 is much closer
     matrix = [
-        [0, 60, 1800, 0],      # 1 min vs 30 min
+        [0, 60, 1800, 0],  # 1 min vs 30 min
         [60, 0, 1800, 60],
         [1800, 1800, 0, 1800],
         [0, 60, 1800, 0],
@@ -237,13 +237,16 @@ async def test_next_endpoint_with_places(client):
 
     # Add two places
     for name in ["Parliament", "Castle"]:
-        resp = await client.post(f"/api/trips/{trip_id}/places", json={
-            "name": name,
-            "lat": 47.5073,
-            "lon": 19.0458,
-            "category": "landmark",
-            "priority": "want",
-        })
+        resp = await client.post(
+            f"/api/trips/{trip_id}/places",
+            json={
+                "name": name,
+                "lat": 47.5073,
+                "lon": 19.0458,
+                "category": "landmark",
+                "priority": "want",
+            },
+        )
         assert resp.status_code == 201
 
     mock_matrix = [
@@ -253,7 +256,11 @@ async def test_next_endpoint_with_places(client):
         [0, 300, 600, 0],
     ]
 
-    with patch("app.routers.next_action.get_distance_matrix", new_callable=AsyncMock, return_value=mock_matrix):
+    with patch(
+        "app.routers.feasibility.get_distance_matrix",
+        new_callable=AsyncMock,
+        return_value=mock_matrix,
+    ):
         resp = await client.get(f"/api/trips/{trip_id}/next?time=09:00")
 
     assert resp.status_code == 200

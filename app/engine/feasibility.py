@@ -1,11 +1,48 @@
+"""
+Feasibility calculation utilities.
+
+This module provides:
+- calculate_feasibility(...): core per-place feasibility calculation used by
+  the API endpoints and scoring engine.
+- parse_closing_time(...): a lightweight parser that extracts a closing
+  datetime for a given trip date from a simple OSM `opening_hours` fragment.
+
+Notes:
+- All datetimes used for arithmetic in this module are normalized to
+  timezone-aware UTC datetimes. If callers pass naive datetimes we assume
+  they are in UTC and tag them accordingly. This keeps arithmetic safe
+  and avoids TypeError caused by mixing naive and aware datetimes.
+- The OSM `opening_hours` format can be far more complex than handled here.
+  This parser supports common simple cases (day ranges and a single time
+  interval per rule). For higher fidelity consider using a dedicated
+  opening_hours parser library.
+"""
+
+from __future__ import annotations
+
 import logging
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.engine.category_defaults import get_duration_minutes
 
 logger = logging.getLogger(__name__)
+
+
+def _to_utc_aware(dt: datetime | None) -> datetime:
+    """
+    Ensure datetime is timezone-aware in UTC.
+
+    - If `dt` already has tzinfo, convert to UTC.
+    - If `dt` is naive, assume UTC and attach tzinfo=UTC.
+    """
+    if dt is None:
+        raise ValueError("datetime value required")
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def calculate_feasibility(
@@ -15,71 +52,114 @@ def calculate_feasibility(
     current_time: datetime,
     trip_end_time: datetime,
     trip_date: date,
+    trip_timezone: str | None = None,
 ) -> dict[str, Any]:
     """
     Calculate feasibility for a single place.
 
     Args:
-        place: dict with keys: id, category, estimated_duration_min, opening_hours, status
-        travel_to_place_seconds: OSRM duration from current position to this place
-        travel_to_endpoint_seconds: OSRM duration from this place to trip endpoint
-        current_time: current datetime
-        trip_end_time: datetime when trip ends
-        trip_date: date of the trip
+        place: dict with keys including: id, category, estimated_duration_min,
+               opening_hours, status
+        travel_to_place_seconds: travel time (seconds) from current pos -> place
+        travel_to_endpoint_seconds: travel time (seconds) from place -> endpoint
+        current_time: current datetime (may be naive or tz-aware)
+        trip_end_time: trip end datetime (may be naive or tz-aware)
+        trip_date: date of the trip (used when parsing opening hours)
+        trip_timezone: optional IANA timezone name for the trip (e.g. "Europe/Budapest").
+                       If provided, opening-hours will be interpreted in this timezone
+                       and converted to UTC for internal arithmetic.
 
-    Returns dict with: place_id, color, slack_minutes, closing_urgency_minutes, reason
+    Returns:
+        dict with keys:
+          - place_id
+          - color: one of ("green","yellow","red","gray","unknown")
+          - slack_minutes: float (may be negative)
+          - closing_urgency_minutes: float | None
+          - reason: human-readable explanation
     """
-    visit_duration_min = get_duration_minutes(
+    # Normalize incoming datetimes to tz-aware UTC to avoid mixing naive/aware
+    now_utc: datetime = _to_utc_aware(current_time)
+    trip_end_utc: datetime = _to_utc_aware(trip_end_time)
+
+    visit_duration_min: float = get_duration_minutes(
         place.get("category"), place.get("estimated_duration_min")
     )
-    visit_duration_sec = visit_duration_min * 60
+    visit_duration_sec: int = int(visit_duration_min * 60)
 
-    travel_to = travel_to_place_seconds
-    arrival_at_place = current_time + timedelta(seconds=travel_to)
-    departure_from_place = arrival_at_place + timedelta(seconds=visit_duration_sec)
-    travel_back = travel_to_endpoint_seconds
-    finish_time = departure_from_place + timedelta(seconds=travel_back)
+    travel_to_sec: float = float(travel_to_place_seconds or 0)
+    travel_back_sec: float = float(travel_to_endpoint_seconds or 0)
 
-    # Slack
-    slack_seconds = (trip_end_time - finish_time).total_seconds()
-    remaining_seconds = (trip_end_time - current_time).total_seconds()
-    slack_ratio = slack_seconds / remaining_seconds if remaining_seconds > 0 else 0
+    arrival_at_place: datetime = now_utc + timedelta(seconds=travel_to_sec)
+    departure_from_place: datetime = arrival_at_place + timedelta(
+        seconds=visit_duration_sec
+    )
+    finish_time: datetime = departure_from_place + timedelta(seconds=travel_back_sec)
 
-    # Opening hours
-    closing_time = None
-    closing_urgency = None
-    window_remaining = None
+    # Slack calculations (seconds)
+    slack_seconds: float = (trip_end_utc - finish_time).total_seconds()
+    remaining_seconds: float = (trip_end_utc - now_utc).total_seconds()
+    slack_ratio: float = (
+        slack_seconds / remaining_seconds if remaining_seconds > 0 else 0.0
+    )
 
-    if place.get("opening_hours"):
-        closing_time = parse_closing_time(place["opening_hours"], trip_date)
-        if closing_time:
-            closing_urgency = (closing_time - arrival_at_place).total_seconds()
-            window_remaining = (closing_time - current_time).total_seconds()
+    # Opening hours handling
+    closing_time_utc: datetime | None = None
+    closing_urgency_sec: float | None = None
+    window_remaining_sec: float | None = None
 
-    # Color logic
+    opening_hours: str | None = place.get("opening_hours")
+    if opening_hours:
+        # Pass trip_timezone through to parse_closing_time so the parser can
+        # interpret the wall-clock close time in the trip's local timezone.
+        parsed: datetime | None = parse_closing_time(
+            opening_hours, trip_date, trip_timezone
+        )
+        if parsed:
+            # parse_closing_time returns a timezone-aware UTC datetime; coerce defensively
+            try:
+                closing_time_utc = _to_utc_aware(parsed)
+            except Exception:
+                # If parse returned something odd, skip opening-hours logic
+                logger.exception(
+                    "parse_closing_time returned unparseable value; ignoring opening hours for place %s",
+                    place.get("id"),
+                )
+                closing_time_utc = None
+
+    if closing_time_utc:
+        closing_urgency_sec = (closing_time_utc - arrival_at_place).total_seconds()
+        window_remaining_sec = (closing_time_utc - now_utc).total_seconds()
+
+    # Determine color and reason
+    color: str
+    reason: str
     if slack_seconds < 0:
         color = "gray"
         reason = "Not enough time to visit and reach endpoint"
-    elif closing_time and arrival_at_place > closing_time:
+    elif closing_time_utc and arrival_at_place > closing_time_utc:
         color = "gray"
         reason = f"Closed by the time you arrive ({arrival_at_place.strftime('%H:%M')})"
-    elif closing_time and window_remaining is not None and window_remaining < 30 * 60:
+    elif (
+        closing_time_utc
+        and window_remaining_sec is not None
+        and window_remaining_sec < 30 * 60
+    ):
         color = "red"
-        reason = f"Closes in {_format_duration(window_remaining)}"
+        reason = f"Closes in {_format_duration(window_remaining_sec)}"
     elif slack_ratio < 0.10:
         color = "red"
         reason = "Very tight schedule"
     elif (
-        closing_time
-        and window_remaining is not None
-        and window_remaining < 2 * 60 * 60
+        closing_time_utc
+        and window_remaining_sec is not None
+        and window_remaining_sec < 2 * 60 * 60
     ):
         color = "yellow"
-        reason = f"Closes in {_format_duration(window_remaining)}"
+        reason = f"Closes in {_format_duration(window_remaining_sec)}"
     elif slack_ratio < 0.30:
         color = "yellow"
         reason = "Feasible but limited time"
-    elif not place.get("opening_hours"):
+    elif not opening_hours:
         color = "unknown"
         reason = "No opening hours data — time-feasible"
     else:
@@ -87,81 +167,143 @@ def calculate_feasibility(
         reason = "Plenty of time"
 
     return {
-        "place_id": place["id"],
+        "place_id": place.get("id"),
         "color": color,
         "slack_minutes": round(slack_seconds / 60, 1),
         "closing_urgency_minutes": (
-            round(closing_urgency / 60, 1) if closing_urgency is not None else None
+            round(closing_urgency_sec / 60, 1)
+            if closing_urgency_sec is not None
+            else None
         ),
         "reason": reason,
     }
 
 
-def parse_closing_time(opening_hours: str, trip_date: date) -> datetime | None:
+def parse_closing_time(
+    opening_hours: str, trip_date: date, trip_timezone: str | None = None
+) -> datetime | None:
     """
-    Parse OSM opening_hours format to extract closing time for the given date.
+    Parse a closing time from a simple OSM opening_hours string for the given trip_date.
 
-    Handles common formats like:
-    - "Mo-Fr 09:00-17:00"
-    - "Mo-Su 10:00-18:00"
-    - "09:00-17:00"
-    - "Mo-Fr 09:00-17:00; Sa 10:00-14:00"
+    Behavior:
+    - Splits rules by ';' and scans each rule for a time interval like 'HH:MM-HH:MM'.
+    - If a rule has a day specification (e.g. 'Mo-Fr'), it will be matched against trip_date.weekday().
+    - If `trip_timezone` (IANA string) is provided, the parsed wall-clock closing time is interpreted
+      in that timezone and converted to a UTC-aware datetime. If not provided, the parsed time
+      is assumed to be in UTC (backwards-compatible behavior).
 
-    Returns datetime of closing time on trip_date, or None if unparseable.
+    Returns:
+        timezone-aware datetime in UTC, or None if unparseable.
+
+    Limitations:
+    - This supports only a single interval per rule and simple day specs ('Mo', 'Tu', 'Mo-Fr', 'Sa,Su').
+    - Complex expressions (exceptions, holidays, 24/7, overnight spans like 20:00-02:00) are not fully supported.
     """
-    DAY_MAP = {"Mo": 0, "Tu": 1, "We": 2, "Th": 3, "Fr": 4, "Sa": 5, "Su": 6}
-    weekday = trip_date.weekday()
+    if not opening_hours:
+        return None
 
-    rules = [r.strip() for r in opening_hours.split(";")]
+    DAY_MAP: dict[str, int] = {
+        "Mo": 0,
+        "Tu": 1,
+        "We": 2,
+        "Th": 3,
+        "Fr": 4,
+        "Sa": 5,
+        "Su": 6,
+    }
+    weekday: int = trip_date.weekday()
+
+    # Resolve timezone object if provided
+    tz: tzinfo = timezone.utc
+    if trip_timezone:
+        try:
+            tz = ZoneInfo(trip_timezone)
+        except Exception:
+            logger.exception(
+                "Invalid trip_timezone %r; falling back to UTC", trip_timezone
+            )
+
+    # Split alternative rules
+    rules: list[str] = [r.strip() for r in opening_hours.split(";") if r.strip()]
+
+    time_re = re.compile(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})")
 
     for rule in rules:
-        time_match = re.search(r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})", rule)
-        if not time_match:
+        # Find the time interval in the rule
+        tm = time_re.search(rule)
+        if not tm:
             continue
 
-        close_str = time_match.group(2)
-        day_part = rule[: time_match.start()].strip().rstrip(",").strip()
+        close_str: str = tm.group(2)
+        # The day part is everything before the time interval
+        day_part: str = rule[: tm.start()].strip().rstrip(",").strip()
 
+        matches_day: bool = False
         if day_part:
-            if _day_matches(day_part, weekday, DAY_MAP):
-                h, m = close_str.split(":")
-                return datetime.combine(trip_date, time(int(h), int(m)))
+            # day_part may have comma-separated segments like "Mo,Tu" or range "Mo-Fr"
+            segments: list[str] = [
+                seg.strip() for seg in day_part.split(",") if seg.strip()
+            ]
+            for seg in segments:
+                # try range like Mo-Fr
+                rng = re.match(r"^([A-Za-z]{2})\s*-\s*([A-Za-z]{2})$", seg)
+                if rng:
+                    start: int | None = DAY_MAP.get(rng.group(1))
+                    end: int | None = DAY_MAP.get(rng.group(2))
+                    if start is None or end is None:
+                        continue
+                    if start <= end:
+                        if start <= weekday <= end:
+                            matches_day = True
+                            break
+                    else:
+                        # wrapped range (e.g., Fr-Mo)
+                        if weekday >= start or weekday <= end:
+                            matches_day = True
+                            break
+                else:
+                    # single day like 'Mo' or abbreviation
+                    single: int | None = DAY_MAP.get(seg)
+                    if single is not None and single == weekday:
+                        matches_day = True
+                        break
         else:
+            # No day part means applies to all days
+            matches_day = True
+
+        if not matches_day:
+            continue
+
+        # Parse closing time as a localized datetime and convert to UTC
+        try:
             h, m = close_str.split(":")
-            return datetime.combine(trip_date, time(int(h), int(m)))
+            closing_local: datetime = datetime.combine(trip_date, time(int(h), int(m)))
+            # Attach the trip-local timezone and convert to UTC
+            closing_with_tz: datetime = closing_local.replace(tzinfo=tz)
+            closing_utc: datetime = closing_with_tz.astimezone(timezone.utc)
+            return closing_utc
+        except Exception:
+            logger.exception(
+                "Failed to parse close time %r for rule %r", close_str, rule
+            )
+            continue
 
     return None
 
 
-def _day_matches(day_part: str, weekday: int, day_map: dict[str, int]) -> bool:
-    """Check if weekday matches day specification like 'Mo-Fr', 'Sa,Su', 'Mo'."""
-    segments = [s.strip() for s in day_part.split(",")]
-    for seg in segments:
-        range_match = re.match(r"([A-Z][a-z])\s*-\s*([A-Z][a-z])", seg)
-        if range_match:
-            start_day = day_map.get(range_match.group(1))
-            end_day = day_map.get(range_match.group(2))
-            if start_day is not None and end_day is not None:
-                if start_day <= end_day:
-                    if start_day <= weekday <= end_day:
-                        return True
-                else:
-                    if weekday >= start_day or weekday <= end_day:
-                        return True
-        else:
-            single = day_map.get(seg.strip())
-            if single is not None and single == weekday:
-                return True
-    return False
-
-
 def _format_duration(seconds: float) -> str:
-    """Format seconds into human-readable duration."""
-    minutes = int(seconds / 60)
+    """Human-readable duration from seconds (minutes/hours)."""
+    try:
+        secs: int = int(seconds)
+    except Exception:
+        return "0 min"
+    if secs < 60:
+        return f"{secs} sec"
+    minutes: int = secs // 60
     if minutes < 60:
         return f"{minutes} min"
-    hours = minutes // 60
-    mins = minutes % 60
+    hours: int = minutes // 60
+    mins: int = minutes % 60
     if mins:
         return f"{hours}h {mins}min"
     return f"{hours}h"

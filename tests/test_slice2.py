@@ -45,8 +45,8 @@ def test_feasibility_green():
     current = datetime(2026, 4, 15, 9, 0)
     result = calculate_feasibility(
         place=make_place(),
-        travel_to_place_seconds=600,       # 10 min
-        travel_to_endpoint_seconds=600,     # 10 min
+        travel_to_place_seconds=600,  # 10 min
+        travel_to_endpoint_seconds=600,  # 10 min
         current_time=current,
         trip_end_time=TRIP_END,
         trip_date=TRIP_DATE,
@@ -63,8 +63,8 @@ def test_feasibility_red_closing_soon():
     # A museum (90 min) would be gray (impossible) at this point.
     result = calculate_feasibility(
         place=make_place(category="viewpoint", opening_hours="Mo-Su 09:00-18:00"),
-        travel_to_place_seconds=60,        # 1 min
-        travel_to_endpoint_seconds=60,     # 1 min
+        travel_to_place_seconds=60,  # 1 min
+        travel_to_endpoint_seconds=60,  # 1 min
         current_time=current,
         trip_end_time=TRIP_END,
         trip_date=TRIP_DATE,
@@ -81,8 +81,8 @@ def test_feasibility_gray_impossible():
     current = datetime(2026, 4, 15, 17, 0)
     result = calculate_feasibility(
         place=make_place(),
-        travel_to_place_seconds=3600,      # 1 hour to get there
-        travel_to_endpoint_seconds=3600,    # 1 hour back
+        travel_to_place_seconds=3600,  # 1 hour to get there
+        travel_to_endpoint_seconds=3600,  # 1 hour back
         current_time=current,
         trip_end_time=TRIP_END,
         trip_date=TRIP_DATE,
@@ -140,7 +140,9 @@ def test_feasibility_yellow_tight():
     # travel_to=4500s(75min) + visit(90min) + travel_back=4500s(75min) = 240 min
     # slack = 300 - 240 = 60 min. ratio = 60/300 = 0.20
     result = calculate_feasibility(
-        place=make_place(opening_hours="Mo-Su 09:00-22:00"),  # far closing to avoid closing urgency
+        place=make_place(
+            opening_hours="Mo-Su 09:00-22:00"
+        ),  # far closing to avoid closing urgency
         travel_to_place_seconds=4500,
         travel_to_endpoint_seconds=4500,
         current_time=current,
@@ -241,12 +243,16 @@ async def test_feasibility_endpoint(client):
     # Mock OSRM distance matrix
     # Matrix shape: 3x3 (current_pos, place, endpoint)
     mock_matrix = [
-        [0, 600, 0],       # from current pos
-        [600, 0, 600],     # from place
-        [0, 600, 0],       # from endpoint
+        [0, 600, 0],  # from current pos
+        [600, 0, 600],  # from place
+        [0, 600, 0],  # from endpoint
     ]
 
-    with patch("app.routers.feasibility.get_distance_matrix", new_callable=AsyncMock, return_value=mock_matrix):
+    with patch(
+        "app.routers.feasibility.get_distance_matrix",
+        new_callable=AsyncMock,
+        return_value=mock_matrix,
+    ):
         resp = await client.get(f"/api/trips/{trip_id}/feasibility?time=09:00")
 
     assert resp.status_code == 200

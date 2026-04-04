@@ -54,7 +54,9 @@ async def _create_trip(client: httpx.AsyncClient) -> dict:
     return resp.json()
 
 
-async def _add_place(client: httpx.AsyncClient, trip_id: str, place: dict | None = None) -> dict:
+async def _add_place(
+    client: httpx.AsyncClient, trip_id: str, place: dict | None = None
+) -> dict:
     """Helper to add a place and return the response JSON."""
     resp = await client.post(f"/api/trips/{trip_id}/places", json=place or SAMPLE_PLACE)
     assert resp.status_code == 201
@@ -132,14 +134,18 @@ async def test_add_place(client: httpx.AsyncClient):
 async def test_get_trip_with_places(client: httpx.AsyncClient):
     created = await _create_trip(client)
     await _add_place(client, created["id"])
-    await _add_place(client, created["id"], {
-        "name": "Buda Castle",
-        "lat": 47.4961,
-        "lon": 19.0398,
-        "category": "landmark",
-        "priority": "must",
-        "estimated_duration_min": 90,
-    })
+    await _add_place(
+        client,
+        created["id"],
+        {
+            "name": "Buda Castle",
+            "lat": 47.4961,
+            "lon": 19.0398,
+            "category": "landmark",
+            "priority": "must",
+            "estimated_duration_min": 90,
+        },
+    )
 
     resp = await client.get(f"/api/trips/{created['id']}")
     assert resp.status_code == 200

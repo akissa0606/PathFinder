@@ -1,6 +1,7 @@
 """Opportunity-cost scoring for 'What Next?' recommendations."""
 
 import logging
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -12,6 +13,9 @@ logger = logging.getLogger(__name__)
 PRIORITY_WEIGHTS: dict[str, float] = {"must": 1.0, "want": 0.5, "if_time": 0.2}
 
 
+__all__ = ["score_next_actions"]
+
+
 def _is_feasible(place: dict[str, Any], feas: dict[str, Any]) -> bool:
     """A place is feasible if its color is not gray."""
     return feas.get("color") != "gray"
@@ -19,7 +23,7 @@ def _is_feasible(place: dict[str, Any], feas: dict[str, Any]) -> bool:
 
 def score_next_actions(
     places: list[dict[str, Any]],
-    matrix: list[list[float]],
+    matrix: Sequence[Sequence[float]],
     current_time: datetime,
     trip_end_time: datetime,
     trip_date: date,
@@ -57,14 +61,14 @@ def score_next_actions(
 
     # Compute feasibility for any places missing from the provided map
     for i, place in enumerate(places):
-        pid = place["id"]
+        pid: int = place["id"]
         if pid in feasibility:
             continue
-        place_idx = i + 1
-        feas = calculate_feasibility(
+        idx: int = i + 1
+        feas: dict[str, Any] = calculate_feasibility(
             place=place,
-            travel_to_place_seconds=matrix[0][place_idx],
-            travel_to_endpoint_seconds=matrix[place_idx][endpoint_idx],
+            travel_to_place_seconds=matrix[0][idx],
+            travel_to_endpoint_seconds=matrix[idx][endpoint_idx],
             current_time=current_time,
             trip_end_time=trip_end_time,
             trip_date=trip_date,
@@ -72,7 +76,7 @@ def score_next_actions(
         feasibility[pid] = feas
 
     # Step 2: filter to feasible candidates only
-    feasible = [
+    feasible: list[tuple[int, dict[str, Any]]] = [
         (i, p)
         for i, p in enumerate(places)
         if _is_feasible(p, feasibility.get(p["id"], {}))
@@ -83,27 +87,21 @@ def score_next_actions(
         return []
 
     # Step 3: compute opportunity cost for each feasible candidate
-    scores = []
-    max_travel = max(matrix[0][i + 1] for i, _ in feasible) if feasible else 1
+    scores: list[dict[str, Any]] = []
+    max_travel: float = max(matrix[0][i + 1] for i, _ in feasible) if feasible else 1
 
     for idx, place in feasible:
-        place_idx = idx + 1
-        travel_to_place = matrix[0][place_idx]
-        visit_duration_sec = (
-            get_duration_minutes(
-                place.get("category"), place.get("estimated_duration_min")
-            )
-            * 60
-        )
+        place_idx: int = idx + 1
+        travel_to_place: float = matrix[0][place_idx]
 
         # Opportunity cost: how many other feasible places become unreachable
         # if we visit each other place first?
-        cost = 0
+        cost: int = 0
         for other_idx, other in feasible:
             if other["id"] == place["id"]:
                 continue
-            other_place_idx = other_idx + 1
-            other_visit_sec = (
+            other_place_idx: int = other_idx + 1
+            other_visit_sec: float = (
                 get_duration_minutes(
                     other.get("category"), other.get("estimated_duration_min")
                 )
@@ -111,14 +109,14 @@ def score_next_actions(
             )
 
             # Simulate visiting 'other' first
-            time_after_other = current_time + timedelta(
+            time_after_other: datetime = current_time + timedelta(
                 seconds=matrix[0][other_place_idx] + other_visit_sec
             )
             # Then check: can we still reach 'place' from 'other' and make it to endpoint?
-            travel_other_to_place = matrix[other_place_idx][place_idx]
-            travel_place_to_endpoint = matrix[place_idx][endpoint_idx]
+            travel_other_to_place: float = matrix[other_place_idx][place_idx]
+            travel_place_to_endpoint: float = matrix[place_idx][endpoint_idx]
 
-            simulated_feas = calculate_feasibility(
+            simulated_feas: dict[str, Any] = calculate_feasibility(
                 place=place,
                 travel_to_place_seconds=travel_other_to_place,
                 travel_to_endpoint_seconds=travel_place_to_endpoint,
@@ -130,16 +128,18 @@ def score_next_actions(
                 cost += 1
 
         # Normalize scores to 0-1
-        opportunity_score = cost / max(len(feasible) - 1, 1)
-        proximity_score = 1 - (travel_to_place / max_travel) if max_travel > 0 else 1
-        priority_score = PRIORITY_WEIGHTS.get(place.get("priority", "want"), 0.5)
+        opportunity_score: float = cost / max(len(feasible) - 1, 1)
+        proximity_score: float = (
+            1 - (travel_to_place / max_travel) if max_travel > 0 else 1
+        )
+        priority_score: float = PRIORITY_WEIGHTS.get(place.get("priority", "want"), 0.5)
 
-        total = (
+        total: float = (
             0.40 * opportunity_score + 0.30 * proximity_score + 0.30 * priority_score
         )
 
         # Human-readable reason
-        reasons = []
+        reasons: list[str] = []
         if opportunity_score > 0.5:
             reasons.append(f"high risk of becoming unreachable ({cost} conflicts)")
         if place.get("priority") == "must":
@@ -148,7 +148,7 @@ def score_next_actions(
             reasons.append(f"nearby ({int(travel_to_place / 60)} min)")
         feas = feasibility.get(place["id"], {})
         if feas.get("closing_urgency_minutes") is not None:
-            closing_min = feas["closing_urgency_minutes"]
+            closing_min: float = feas["closing_urgency_minutes"]
             if closing_min < 120:
                 reasons.append(f"closes in {int(closing_min)} min")
 

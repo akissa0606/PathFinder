@@ -1,57 +1,84 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import L from 'leaflet'
-import { getTrip, searchPlaces, addPlace, deletePlace, updatePlace, getFeasibility, getNextRecommendation, checkinPlace, connectTripStream } from '../api.js'
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useRoute } from "vue-router";
+import L from "leaflet";
+import {
+  getTrip,
+  updateTrip,
+  searchPlaces,
+  addPlace,
+  deletePlace,
+  updatePlace,
+  getFeasibility,
+  getNextRecommendation,
+  checkinPlace,
+  connectTripStream,
+} from "../api.js";
 
 // Fix Leaflet default marker icon paths for bundled builds
-delete L.Icon.Default.prototype._getIconUrl
+delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href,
-  iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).href,
-  shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).href,
-})
+  iconRetinaUrl: new URL(
+    "leaflet/dist/images/marker-icon-2x.png",
+    import.meta.url,
+  ).href,
+  iconUrl: new URL("leaflet/dist/images/marker-icon.png", import.meta.url).href,
+  shadowUrl: new URL("leaflet/dist/images/marker-shadow.png", import.meta.url)
+    .href,
+});
 
 const markerIconOpts = {
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-}
+  shadowUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+};
 
 // Start/end point icons
 const greenIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
   ...markerIconOpts,
-})
+});
 const redIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
   ...markerIconOpts,
-})
+});
 const orangeIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png",
   ...markerIconOpts,
-})
+});
 
 // Feasibility color icons for places
 const feasGreenIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
   ...markerIconOpts,
-})
+});
 const feasYellowIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-yellow.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-yellow.png",
   ...markerIconOpts,
-})
+});
 const feasRedIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
   ...markerIconOpts,
-})
+});
 const feasGrayIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-grey.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-grey.png",
   ...markerIconOpts,
-})
+});
 const feasVioletIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-violet.png",
   ...markerIconOpts,
-})
+});
 
 const feasIconMap = {
   green: feasGreenIcon,
@@ -59,199 +86,224 @@ const feasIconMap = {
   red: feasRedIcon,
   gray: feasGrayIcon,
   unknown: feasVioletIcon,
-}
+};
 
-const route = useRoute()
-const tripId = route.params.id
+const route = useRoute();
+const tripId = route.params.id;
 
-const trip = ref(null)
-const places = ref([])
-const searchQuery = ref('')
-const searchResults = ref([])
-const searching = ref(false)
-const loadError = ref('')
-const actionError = ref('')
-const feasibility = ref(new Map())
-const userLat = ref(null)
-const userLon = ref(null)
+const trip = ref(null);
+const places = ref([]);
+const searchQuery = ref("");
+const searchResults = ref([]);
+const searching = ref(false);
+const loadError = ref("");
+const actionError = ref("");
+const feasibility = ref(new Map());
+const userLat = ref(null);
+const userLon = ref(null);
 
-const settingPosition = ref(false)
-const checkinLoading = ref(false)
-const showArrivePicker = ref(false)
-const nextRecs = ref(null)       // { recommendations: [], message: '' }
-const nextLoading = ref(false)
-const nextSkipIndex = ref(0)     // which recommendation is "primary"
-const alerts = ref([])           // urgency alert banners
+const settingPosition = ref(false);
+const checkinLoading = ref(false);
+const showArrivePicker = ref(false);
+const nextRecs = ref(null); // { recommendations: [], message: '' }
+const nextLoading = ref(false);
+const modeChanging = ref(false);
+const nextSkipIndex = ref(0); // which recommendation is "primary"
+const alerts = ref([]); // urgency alert banners
 
-let map = null
-let eventSource = null
-let markersLayer = null
-let searchMarkersLayer = null
-let userPositionMarker = null
+let map = null;
+let eventSource = null;
+let markersLayer = null;
+let searchMarkersLayer = null;
+let userPositionMarker = null;
 
 // Computed stats
-const visitedCount = computed(() => places.value.filter(p => p.status === 'done' || p.status === 'visiting').length)
-const remainingCount = computed(() => places.value.filter(p => !p.status || p.status === 'pending').length)
+const visitedCount = computed(
+  () =>
+    places.value.filter((p) => p.status === "done" || p.status === "visiting")
+      .length,
+);
+const remainingCount = computed(
+  () => places.value.filter((p) => !p.status || p.status === "pending").length,
+);
 const reachableCount = computed(() => {
-  return places.value.filter(p => {
-    if (p.status && p.status !== 'pending') return false
-    const f = feasibility.value.get(p.id)
-    return !f || f.color !== 'gray'
-  }).length
-})
+  return places.value.filter((p) => {
+    if (p.status && p.status !== "pending") return false;
+    const f = feasibility.value.get(p.id);
+    return !f || f.color !== "gray";
+  }).length;
+});
 
 const remainingMinutes = computed(() => {
-  if (!trip.value) return 0
-  const now = new Date()
-  const [eh, em] = (trip.value.end_time || '18:00').split(':').map(Number)
-  const end = new Date(now)
-  end.setHours(eh, em, 0, 0)
-  const diff = Math.max(0, Math.floor((end - now) / 60000))
-  return diff
-})
+  if (!trip.value) return 0;
+  const now = new Date();
+  const [eh, em] = (trip.value.end_time || "18:00").split(":").map(Number);
+  const end = new Date(now);
+  end.setHours(eh, em, 0, 0);
+  const diff = Math.max(0, Math.floor((end - now) / 60000));
+  return diff;
+});
 
 // Sectioned place lists
-const visitingPlace = computed(() => places.value.find(p => p.status === 'visiting') || null)
-const pendingPlaces = computed(() => places.value.filter(p => !p.status || p.status === 'pending'))
-const donePlaces = computed(() => places.value.filter(p => p.status === 'done'))
-const skippedPlaces = computed(() => places.value.filter(p => p.status === 'skipped'))
+const visitingPlace = computed(
+  () => places.value.find((p) => p.status === "visiting") || null,
+);
+const pendingPlaces = computed(() =>
+  places.value.filter((p) => !p.status || p.status === "pending"),
+);
+const donePlaces = computed(() =>
+  places.value.filter((p) => p.status === "done"),
+);
+const skippedPlaces = computed(() =>
+  places.value.filter((p) => p.status === "skipped"),
+);
 
 const timeUsedPercent = computed(() => {
-  if (!trip.value) return 0
-  const [sh, sm] = (trip.value.start_time || '09:00').split(':').map(Number)
-  const [eh, em] = (trip.value.end_time || '18:00').split(':').map(Number)
-  const totalMin = (eh * 60 + em) - (sh * 60 + sm)
-  if (totalMin <= 0) return 0
-  const now = new Date()
-  const elapsed = (now.getHours() * 60 + now.getMinutes()) - (sh * 60 + sm)
-  return Math.min(100, Math.max(0, (elapsed / totalMin) * 100))
-})
+  if (!trip.value) return 0;
+  const [sh, sm] = (trip.value.start_time || "09:00").split(":").map(Number);
+  const [eh, em] = (trip.value.end_time || "18:00").split(":").map(Number);
+  const totalMin = eh * 60 + em - (sh * 60 + sm);
+  if (totalMin <= 0) return 0;
+  const now = new Date();
+  const elapsed = now.getHours() * 60 + now.getMinutes() - (sh * 60 + sm);
+  return Math.min(100, Math.max(0, (elapsed / totalMin) * 100));
+});
 
 function getMarkerIcon(place) {
-  const f = feasibility.value.get(place.id)
-  if (!f) return new L.Icon.Default()
-  return feasIconMap[f.color] || new L.Icon.Default()
+  const f = feasibility.value.get(place.id);
+  if (!f) return new L.Icon.Default();
+  return feasIconMap[f.color] || new L.Icon.Default();
 }
 
 function feasColorCss(placeId) {
-  const f = feasibility.value.get(placeId)
-  if (!f) return '#8b5cf6' // violet for unknown
-  const map = { green: '#22c55e', yellow: '#eab308', red: '#ef4444', gray: '#9ca3af', unknown: '#8b5cf6' }
-  return map[f.color] || '#8b5cf6'
+  const f = feasibility.value.get(placeId);
+  if (!f) return "#8b5cf6"; // violet for unknown
+  const map = {
+    green: "#22c55e",
+    yellow: "#eab308",
+    red: "#ef4444",
+    gray: "#9ca3af",
+    unknown: "#8b5cf6",
+  };
+  return map[f.color] || "#8b5cf6";
 }
 
 function feasReason(placeId) {
-  const f = feasibility.value.get(placeId)
-  return f ? f.reason || '' : ''
+  const f = feasibility.value.get(placeId);
+  return f ? f.reason || "" : "";
 }
 
 async function loadTrip() {
   try {
-    const data = await getTrip(tripId)
-    trip.value = data
-    places.value = data.places || []
-    updateMapMarkers()
+    const data = await getTrip(tripId);
+    trip.value = data;
+    places.value = data.places || [];
+    updateMapMarkers();
   } catch (e) {
-    loadError.value = `Failed to load trip: ${e.message}`
+    loadError.value = `Failed to load trip: ${e.message}`;
   }
 }
 
 async function loadFeasibility() {
-  if (!trip.value) return
-  const lat = userLat.value ?? trip.value.start_lat
-  const lon = userLon.value ?? trip.value.start_lon
+  if (!trip.value) return;
+  const lat = userLat.value ?? trip.value.start_lat;
+  const lon = userLon.value ?? trip.value.start_lon;
   try {
-    const data = await getFeasibility(tripId, lat, lon)
-    const m = new Map()
+    const data = await getFeasibility(tripId, lat, lon);
+    const m = new Map();
     if (data && Array.isArray(data.places)) {
       for (const item of data.places) {
-        m.set(item.place_id, item)
+        m.set(item.place_id, item);
       }
     }
-    feasibility.value = m
-    updateMapMarkers()
+    feasibility.value = m;
+    updateMapMarkers();
   } catch (e) {
     // feasibility is optional, don't block UI
   }
 }
 
 function initMap() {
-  map = L.map('map').setView([47.4979, 19.0402], 13)
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors',
-  }).addTo(map)
-  markersLayer = L.layerGroup().addTo(map)
-  searchMarkersLayer = L.layerGroup().addTo(map)
+  map = L.map("map").setView([47.4979, 19.0402], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(map);
+  markersLayer = L.layerGroup().addTo(map);
+  searchMarkersLayer = L.layerGroup().addTo(map);
 
-  map.on('click', (e) => {
-    if (!settingPosition.value) return
-    const { lat, lng } = e.latlng
-    userLat.value = lat
-    userLon.value = lng
-    updateUserPositionMarker(lat, lng)
-    settingPosition.value = false
-    loadFeasibility()
-  })
+  map.on("click", (e) => {
+    if (!settingPosition.value) return;
+    const { lat, lng } = e.latlng;
+    userLat.value = lat;
+    userLon.value = lng;
+    updateUserPositionMarker(lat, lng);
+    settingPosition.value = false;
+    loadFeasibility();
+  });
 }
 
 function updateUserPositionMarker(lat, lon) {
   if (userPositionMarker) {
-    userPositionMarker.setLatLng([lat, lon])
+    userPositionMarker.setLatLng([lat, lon]);
   } else if (map) {
     userPositionMarker = L.circleMarker([lat, lon], {
       radius: 10,
-      color: '#3b82f6',
-      fillColor: '#3b82f6',
+      color: "#3b82f6",
+      fillColor: "#3b82f6",
       fillOpacity: 0.5,
       weight: 2,
-      className: 'user-position-pulse',
-    }).addTo(map)
-    userPositionMarker.bindPopup('Your position')
+      className: "user-position-pulse",
+    }).addTo(map);
+    userPositionMarker.bindPopup("Your position");
   }
 }
 
 function updateMapMarkers() {
-  if (!map || !trip.value) return
-  markersLayer.clearLayers()
+  if (!map || !trip.value) return;
+  markersLayer.clearLayers();
 
-  const t = trip.value
+  const t = trip.value;
   L.marker([t.start_lat, t.start_lon], { icon: greenIcon })
-    .bindPopup('Start')
-    .addTo(markersLayer)
+    .bindPopup("Start")
+    .addTo(markersLayer);
   L.marker([t.end_lat, t.end_lon], { icon: redIcon })
-    .bindPopup('End')
-    .addTo(markersLayer)
+    .bindPopup("End")
+    .addTo(markersLayer);
 
   for (const p of places.value) {
     L.marker([p.lat, p.lon], { icon: getMarkerIcon(p) })
       .bindPopup(p.name)
-      .addTo(markersLayer)
+      .addTo(markersLayer);
   }
 
-  map.setView([t.start_lat, t.start_lon], 13)
+  map.setView([t.start_lat, t.start_lon], 13);
 }
 
 function updateSearchMarkers() {
-  if (!map) return
-  searchMarkersLayer.clearLayers()
+  if (!map) return;
+  searchMarkersLayer.clearLayers();
   for (const r of searchResults.value) {
     L.marker([r.lat, r.lon], { icon: orangeIcon })
       .bindPopup(r.name)
-      .addTo(searchMarkersLayer)
+      .addTo(searchMarkersLayer);
   }
 }
 
 async function doSearch() {
-  if (!searchQuery.value.trim() || !trip.value) return
-  searching.value = true
+  if (!searchQuery.value.trim() || !trip.value) return;
+  searching.value = true;
   try {
-    const results = await searchPlaces(searchQuery.value, trip.value.start_lat, trip.value.start_lon)
-    searchResults.value = Array.isArray(results) ? results : []
-    updateSearchMarkers()
+    const results = await searchPlaces(
+      searchQuery.value,
+      trip.value.start_lat,
+      trip.value.start_lon,
+    );
+    searchResults.value = Array.isArray(results) ? results : [];
+    updateSearchMarkers();
   } catch (e) {
-    searchResults.value = []
+    searchResults.value = [];
   } finally {
-    searching.value = false
+    searching.value = false;
   }
 }
 
@@ -263,229 +315,252 @@ async function handleAddPlace(result) {
       lon: result.lon,
       category: result.category || null,
       opening_hours: result.opening_hours || null,
-    })
-    searchResults.value = searchResults.value.filter((r) => r !== result)
-    updateSearchMarkers()
-    await loadTrip()
-    await loadFeasibility()
+    });
+    searchResults.value = searchResults.value.filter((r) => r !== result);
+    updateSearchMarkers();
+    await loadTrip();
+    await loadFeasibility();
   } catch (e) {
-    actionError.value = `Failed to add place: ${e.message}`
+    actionError.value = `Failed to add place: ${e.message}`;
   }
 }
 
 async function handleDeletePlace(placeId) {
   try {
-    actionError.value = ''
-    await deletePlace(tripId, placeId)
-    await loadTrip()
-    await loadFeasibility()
+    actionError.value = "";
+    await deletePlace(tripId, placeId);
+    await loadTrip();
+    await loadFeasibility();
   } catch (e) {
-    actionError.value = `Failed to delete place: ${e.message}`
+    actionError.value = `Failed to delete place: ${e.message}`;
   }
 }
 
 async function handlePriorityChange(place, newPriority) {
   try {
-    actionError.value = ''
-    await updatePlace(tripId, place.id, { priority: newPriority })
-    place.priority = newPriority
+    actionError.value = "";
+    await updatePlace(tripId, place.id, { priority: newPriority });
+    place.priority = newPriority;
   } catch (e) {
-    actionError.value = `Failed to update priority: ${e.message}`
+    actionError.value = `Failed to update priority: ${e.message}`;
   }
 }
 
 async function handleDurationChange(place, newDuration) {
   try {
-    actionError.value = ''
-    await updatePlace(tripId, place.id, { estimated_duration_min: parseInt(newDuration) || 30 })
-    place.estimated_duration_min = parseInt(newDuration) || 30
+    actionError.value = "";
+    await updatePlace(tripId, place.id, {
+      estimated_duration_min: parseInt(newDuration) || 30,
+    });
+    place.estimated_duration_min = parseInt(newDuration) || 30;
   } catch (e) {
-    actionError.value = `Failed to update duration: ${e.message}`
+    actionError.value = `Failed to update duration: ${e.message}`;
   }
 }
 
 async function askWhatNext() {
-  if (!trip.value) return
-  nextLoading.value = true
-  nextSkipIndex.value = 0
+  if (!trip.value) return;
+  nextLoading.value = true;
+  nextSkipIndex.value = 0;
   try {
-    const lat = userLat.value ?? trip.value.start_lat
-    const lon = userLon.value ?? trip.value.start_lon
-    nextRecs.value = await getNextRecommendation(tripId, lat, lon)
+    const lat = userLat.value ?? trip.value.start_lat;
+    const lon = userLon.value ?? trip.value.start_lon;
+    nextRecs.value = await getNextRecommendation(tripId, lat, lon);
     // Highlight top recommendation on map
-    highlightRecommendation()
+    highlightRecommendation();
   } catch (e) {
-    actionError.value = `What Next? failed: ${e.message}`
-    nextRecs.value = null
+    actionError.value = `What Next? failed: ${e.message}`;
+    nextRecs.value = null;
   } finally {
-    nextLoading.value = false
+    nextLoading.value = false;
   }
 }
 
 function skipRecommendation() {
-  if (!nextRecs.value) return
-  const recs = nextRecs.value.recommendations || []
+  if (!nextRecs.value) return;
+  const recs = nextRecs.value.recommendations || [];
   if (nextSkipIndex.value < recs.length - 1) {
-    nextSkipIndex.value++
-    highlightRecommendation()
+    nextSkipIndex.value++;
+    highlightRecommendation();
   } else {
     // No more alternatives
-    nextRecs.value = null
+    nextRecs.value = null;
   }
 }
 
 function navigateToPlace(rec) {
   // Find place coords
-  const place = places.value.find(p => p.id === rec.place_id)
-  if (!place) return
-  const lat = place.lat
-  const lon = place.lon
+  const place = places.value.find((p) => p.id === rec.place_id);
+  if (!place) return;
+  const lat = place.lat;
+  const lon = place.lon;
   // Open Google Maps directions in new tab
-  const origin = userLat.value != null
-    ? `${userLat.value},${userLon.value}`
-    : `${trip.value.start_lat},${trip.value.start_lon}`
+  const origin =
+    userLat.value != null
+      ? `${userLat.value},${userLon.value}`
+      : `${trip.value.start_lat},${trip.value.start_lon}`;
   window.open(
     `https://www.google.com/maps/dir/${origin}/${lat},${lon}`,
-    '_blank'
-  )
+    "_blank",
+  );
 }
 
-let highlightMarker = null
+let highlightMarker = null;
 function highlightRecommendation() {
   if (highlightMarker && map) {
-    map.removeLayer(highlightMarker)
-    highlightMarker = null
+    map.removeLayer(highlightMarker);
+    highlightMarker = null;
   }
-  if (!nextRecs.value || !map) return
-  const recs = nextRecs.value.recommendations || []
-  const rec = recs[nextSkipIndex.value]
-  if (!rec) return
-  const place = places.value.find(p => p.id === rec.place_id)
-  if (!place) return
+  if (!nextRecs.value || !map) return;
+  const recs = nextRecs.value.recommendations || [];
+  const rec = recs[nextSkipIndex.value];
+  if (!rec) return;
+  const place = places.value.find((p) => p.id === rec.place_id);
+  if (!place) return;
   highlightMarker = L.circleMarker([place.lat, place.lon], {
     radius: 18,
-    color: '#f59e0b',
-    fillColor: '#f59e0b',
+    color: "#f59e0b",
+    fillColor: "#f59e0b",
     fillOpacity: 0.3,
     weight: 3,
-    className: 'rec-pulse',
-  }).addTo(map)
-  map.setView([place.lat, place.lon], 15)
+    className: "rec-pulse",
+  }).addTo(map);
+  map.setView([place.lat, place.lon], 15);
 }
 
 async function handleCheckin(placeId, action) {
   try {
-    checkinLoading.value = true
-    actionError.value = ''
-    await checkinPlace(tripId, placeId, action)
-    showArrivePicker.value = false
-    await loadTrip()
-    await loadFeasibility()
+    checkinLoading.value = true;
+    actionError.value = "";
+    await checkinPlace(tripId, placeId, action);
+    showArrivePicker.value = false;
+    await loadTrip();
+    await loadFeasibility();
   } catch (e) {
-    actionError.value = `Check-in failed: ${e.message}`
+    actionError.value = `Check-in failed: ${e.message}`;
   } finally {
-    checkinLoading.value = false
+    checkinLoading.value = false;
   }
 }
 
 function sortedByDistance(placeList) {
-  if (userLat.value == null || userLon.value == null) return placeList
+  if (userLat.value == null || userLon.value == null) return placeList;
   return [...placeList].sort((a, b) => {
-    const dA = (a.lat - userLat.value) ** 2 + (a.lon - userLon.value) ** 2
-    const dB = (b.lat - userLat.value) ** 2 + (b.lon - userLon.value) ** 2
-    return dA - dB
-  })
+    const dA = (a.lat - userLat.value) ** 2 + (a.lon - userLon.value) ** 2;
+    const dB = (b.lat - userLat.value) ** 2 + (b.lon - userLon.value) ** 2;
+    return dA - dB;
+  });
 }
 
 function dismissNextCard() {
-  nextRecs.value = null
+  nextRecs.value = null;
   if (highlightMarker && map) {
-    map.removeLayer(highlightMarker)
-    highlightMarker = null
+    map.removeLayer(highlightMarker);
+    highlightMarker = null;
   }
 }
 
 function handleVisibilityChange() {
-  if (document.visibilityState === 'visible' && trip.value) {
-    loadFeasibility()
+  if (document.visibilityState === "visible" && trip.value) {
+    loadFeasibility();
   }
 }
 
 function connectStream() {
-  if (eventSource) eventSource.close()
-  const lat = userLat.value ?? trip.value?.start_lat
-  const lon = userLon.value ?? trip.value?.start_lon
+  if (eventSource) eventSource.close();
+  const lat = userLat.value ?? trip.value?.start_lat;
+  const lon = userLon.value ?? trip.value?.start_lon;
   eventSource = connectTripStream(tripId, lat, lon, {
     onFeasibilityUpdate(data) {
-      const m = new Map()
+      const m = new Map();
       if (data && Array.isArray(data.places)) {
         for (const item of data.places) {
-          m.set(item.place_id, item)
+          m.set(item.place_id, item);
         }
       }
-      feasibility.value = m
-      updateMapMarkers()
+      feasibility.value = m;
+      updateMapMarkers();
     },
     onUrgencyAlert(alert) {
-      const id = Date.now() + Math.random()
-      alerts.value.push({ id, ...alert })
+      const id = Date.now() + Math.random();
+      alerts.value.push({ id, ...alert });
       // Keep max 5 visible
-      if (alerts.value.length > 5) alerts.value.shift()
+      if (alerts.value.length > 5) alerts.value.shift();
       // Auto-dismiss after 30s
-      setTimeout(() => dismissAlert(id), 30000)
+      setTimeout(() => dismissAlert(id), 30000);
     },
     onError() {
       // EventSource will auto-reconnect
     },
-  })
+  });
 }
 
 function dismissAlert(id) {
-  alerts.value = alerts.value.filter(a => a.id !== id)
+  alerts.value = alerts.value.filter((a) => a.id !== id);
 }
 
 function reconnectStream() {
-  if (trip.value) connectStream()
+  if (trip.value) connectStream();
+}
+
+async function changeTransportMode(newMode) {
+  if (!trip.value || newMode === trip.value.transport_mode) return;
+  modeChanging.value = true;
+  actionError.value = "";
+  try {
+    const updated = await updateTrip(tripId, { transport_mode: newMode });
+    trip.value.transport_mode = updated.transport_mode;
+    await loadFeasibility();
+    connectStream();
+    if (nextRecs.value) await askWhatNext();
+  } catch (e) {
+    actionError.value = `Failed to switch mode: ${e.message}`;
+  } finally {
+    modeChanging.value = false;
+  }
 }
 
 onMounted(async () => {
-  initMap()
-  await loadTrip()
+  initMap();
+  await loadTrip();
 
   // Request geolocation
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        userLat.value = pos.coords.latitude
-        userLon.value = pos.coords.longitude
-        updateUserPositionMarker(pos.coords.latitude, pos.coords.longitude)
-        loadFeasibility()
-        connectStream()
+        userLat.value = pos.coords.latitude;
+        userLon.value = pos.coords.longitude;
+        updateUserPositionMarker(pos.coords.latitude, pos.coords.longitude);
+        loadFeasibility();
+        connectStream();
       },
       () => {
         // Denied or error — use trip start as fallback
-        loadFeasibility()
-        connectStream()
+        loadFeasibility();
+        connectStream();
       },
-      { timeout: 5000 }
-    )
+      { timeout: 5000 },
+    );
   } else {
-    loadFeasibility()
-    connectStream()
+    loadFeasibility();
+    connectStream();
   }
 
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-})
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+});
 
 onUnmounted(() => {
-  if (eventSource) { eventSource.close(); eventSource = null }
-  if (map) {
-    map.remove()
-    map = null
-    userPositionMarker = null
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
   }
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
-})
+  if (map) {
+    map.remove();
+    map = null;
+    userPositionMarker = null;
+  }
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+});
 </script>
 
 <template>
@@ -496,35 +571,72 @@ onUnmounted(() => {
 
     <div class="sidebar">
       <!-- Urgency alert banners -->
-      <div v-for="a in alerts" :key="a.id"
-           :class="['alert-banner', a.severity]"
-           @click="dismissAlert(a.id)">
+      <div
+        v-for="a in alerts"
+        :key="a.id"
+        :class="['alert-banner', a.severity]"
+        @click="dismissAlert(a.id)"
+      >
         <strong>{{ a.place_name }}:</strong> {{ a.message }}
         <span class="alert-dismiss">&times;</span>
       </div>
 
       <div v-if="loadError" class="error">{{ loadError }}</div>
-      <div v-if="actionError" class="error" @click="actionError = ''">{{ actionError }} <small>(click to dismiss)</small></div>
+      <div v-if="actionError" class="error" @click="actionError = ''">
+        {{ actionError }} <small>(click to dismiss)</small>
+      </div>
 
       <div v-if="trip" class="trip-header">
         <h2>{{ trip.city }}</h2>
-        <p>{{ trip.date }} &middot; {{ trip.start_time }}&ndash;{{ trip.end_time }} &middot; {{ trip.transport_mode }}</p>
+        <p>
+          {{ trip.date }} &middot; {{ trip.start_time }}&ndash;{{
+            trip.end_time
+          }}
+          &middot;
+          <select
+            class="mode-select"
+            :value="trip.transport_mode"
+            :disabled="modeChanging"
+            @change="changeTransportMode($event.target.value)"
+          >
+            <option value="foot">Walking</option>
+            <option value="car">Driving</option>
+            <option value="bicycle">Cycling</option>
+          </select>
+          <span v-if="modeChanging" class="mode-loading">updating...</span>
+        </p>
       </div>
 
       <div v-if="trip" class="time-budget">
         <div class="budget-bar">
-          <div class="budget-fill" :style="{ width: timeUsedPercent + '%' }"></div>
+          <div
+            class="budget-fill"
+            :style="{ width: timeUsedPercent + '%' }"
+          ></div>
         </div>
         <span>{{ remainingMinutes }} min remaining</span>
       </div>
 
       <div v-if="trip" class="stats-line">
-        Visited: {{ visitedCount }} &middot; Remaining: {{ remainingCount }} &middot; Reachable: {{ reachableCount }}
+        Visited: {{ visitedCount }} &middot; Remaining:
+        {{ remainingCount }} &middot; Reachable: {{ reachableCount }}
         <button
           :class="['btn', 'btn-small', settingPosition ? 'btn-active' : '']"
           @click="settingPosition = !settingPosition"
-        >{{ settingPosition ? 'Click map...' : 'Set position' }}</button>
-        <button class="btn btn-small btn-refresh" @click="() => { loadFeasibility(); reconnectStream() }">Refresh</button>
+        >
+          {{ settingPosition ? "Click map..." : "Set position" }}
+        </button>
+        <button
+          class="btn btn-small btn-refresh"
+          @click="
+            () => {
+              loadFeasibility();
+              reconnectStream();
+            }
+          "
+        >
+          Refresh
+        </button>
       </div>
 
       <!-- What Next? -->
@@ -533,60 +645,106 @@ onUnmounted(() => {
           class="btn btn-next"
           @click="askWhatNext"
           :disabled="nextLoading || !pendingPlaces.length"
-          :title="pendingPlaces.length ? '' : 'Add places to enable recommendations'"
+          :title="
+            pendingPlaces.length ? '' : 'Add places to enable recommendations'
+          "
         >
-          {{ nextLoading ? 'Thinking...' : (pendingPlaces.length ? 'What Next?' : 'No places') }}
+          {{
+            nextLoading
+              ? "Thinking..."
+              : pendingPlaces.length
+                ? "What Next?"
+                : "No places"
+          }}
         </button>
-        <p v-if="!pendingPlaces.length" class="next-helper">No pending places — add some to get recommendations.</p>
+        <p v-if="!pendingPlaces.length" class="next-helper">
+          No pending places — add some to get recommendations.
+        </p>
 
         <div v-if="nextRecs" class="next-card">
           <button class="next-dismiss" @click="dismissNextCard">&times;</button>
 
-          <template v-if="nextRecs.recommendations && nextRecs.recommendations.length">
+          <template
+            v-if="nextRecs.recommendations && nextRecs.recommendations.length"
+          >
             <div class="next-primary">
               <div class="next-arrow">&rarr;</div>
               <div class="next-details">
-                <strong>{{ nextRecs.recommendations[nextSkipIndex]?.place_name }}</strong>
-                <span class="next-travel">{{ nextRecs.recommendations[nextSkipIndex]?.travel_minutes }} min {{ trip?.transport_mode || 'walk' }}</span>
-                <span class="next-reason">{{ nextRecs.recommendations[nextSkipIndex]?.reason }}</span>
+                <strong>{{
+                  nextRecs.recommendations[nextSkipIndex]?.place_name
+                }}</strong>
+                <span class="next-travel"
+                  >{{
+                    nextRecs.recommendations[nextSkipIndex]?.travel_minutes
+                  }}
+                  min {{ trip?.transport_mode || "walk" }}</span
+                >
+                <span class="next-reason">{{
+                  nextRecs.recommendations[nextSkipIndex]?.reason
+                }}</span>
               </div>
               <div class="next-actions">
-                <button class="btn btn-primary btn-small" @click="navigateToPlace(nextRecs.recommendations[nextSkipIndex])">Navigate</button>
-                <button class="btn btn-small" @click="skipRecommendation">Skip</button>
+                <button
+                  class="btn btn-primary btn-small"
+                  @click="
+                    navigateToPlace(nextRecs.recommendations[nextSkipIndex])
+                  "
+                >
+                  Navigate
+                </button>
+                <button class="btn btn-small" @click="skipRecommendation">
+                  Skip
+                </button>
               </div>
             </div>
 
             <div v-if="nextRecs.recommendations.length > 1" class="next-alts">
               <span class="next-alts-label">Also good:</span>
-              <div v-for="(alt, i) in nextRecs.recommendations" :key="alt.place_id">
+              <div
+                v-for="(alt, i) in nextRecs.recommendations"
+                :key="alt.place_id"
+              >
                 <span v-if="i !== nextSkipIndex" class="next-alt-item">
-                  {{ alt.place_name }} &mdash; {{ alt.travel_minutes }} min, {{ alt.reason }}
+                  {{ alt.place_name }} &mdash; {{ alt.travel_minutes }} min,
+                  {{ alt.reason }}
                 </span>
               </div>
             </div>
           </template>
 
           <div v-else class="next-empty">
-            {{ nextRecs.message || 'No reachable places. Head to your endpoint.' }}
+            {{
+              nextRecs.message || "No reachable places. Head to your endpoint."
+            }}
           </div>
         </div>
       </div>
 
       <div class="search-section">
         <form class="search-bar" @submit.prevent="doSearch">
-          <input v-model="searchQuery" type="text" placeholder="Search places..." />
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="Search places..."
+          />
           <button type="submit" class="btn btn-primary" :disabled="searching">
-            {{ searching ? '...' : 'Search' }}
+            {{ searching ? "..." : "Search" }}
           </button>
         </form>
 
         <ul v-if="searchResults.length" class="search-results">
-          <li v-for="(r, i) in searchResults" :key="i" class="search-result-item">
+          <li
+            v-for="(r, i) in searchResults"
+            :key="i"
+            class="search-result-item"
+          >
             <div>
               <strong>{{ r.name }}</strong>
               <span v-if="r.category" class="category">{{ r.category }}</span>
             </div>
-            <button class="btn btn-small" @click="handleAddPlace(r)">Add</button>
+            <button class="btn btn-small" @click="handleAddPlace(r)">
+              Add
+            </button>
           </li>
         </ul>
       </div>
@@ -599,7 +757,7 @@ onUnmounted(() => {
           :disabled="checkinLoading || !pendingPlaces.length"
           @click="showArrivePicker = !showArrivePicker"
         >
-          {{ showArrivePicker ? 'Cancel' : 'I arrived somewhere' }}
+          {{ showArrivePicker ? "Cancel" : "I arrived somewhere" }}
         </button>
         <button
           v-if="visitingPlace"
@@ -620,7 +778,9 @@ onUnmounted(() => {
               class="picker-item"
               @click="handleCheckin(p.id, 'arrived')"
             >
-              <span class="feas-dot" :style="{ color: feasColorCss(p.id) }">&#9679;</span>
+              <span class="feas-dot" :style="{ color: feasColorCss(p.id) }"
+                >&#9679;</span
+              >
               {{ p.name }}
             </li>
           </ul>
@@ -632,10 +792,20 @@ onUnmounted(() => {
         <h3 class="section-title section-visiting">Now Visiting</h3>
         <div class="place-item place-visiting">
           <div class="place-info">
-            <span class="feas-dot" style="color: #3b82f6;">&#9679;</span>
+            <span class="feas-dot" style="color: #3b82f6">&#9679;</span>
             <strong>{{ visitingPlace.name }}</strong>
-            <span v-if="visitingPlace.category" class="category">{{ visitingPlace.category }}</span>
-            <span class="visiting-since">Since {{ new Date(visitingPlace.arrived_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+            <span v-if="visitingPlace.category" class="category">{{
+              visitingPlace.category
+            }}</span>
+            <span class="visiting-since"
+              >Since
+              {{
+                new Date(visitingPlace.arrived_at).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              }}</span
+            >
           </div>
         </div>
       </div>
@@ -643,18 +813,34 @@ onUnmounted(() => {
       <!-- Remaining (pending) -->
       <div class="place-section">
         <h3 class="section-title">Remaining ({{ pendingPlaces.length }})</h3>
-        <p v-if="!pendingPlaces.length && !donePlaces.length && !skippedPlaces.length" class="empty">No places added yet. Search and add some.</p>
+        <p
+          v-if="
+            !pendingPlaces.length && !donePlaces.length && !skippedPlaces.length
+          "
+          class="empty"
+        >
+          No places added yet. Search and add some.
+        </p>
         <ul class="place-list">
           <li v-for="p in pendingPlaces" :key="p.id" class="place-item">
             <div class="place-info">
-              <span class="feas-dot" :style="{ color: feasColorCss(p.id) }">&#9679;</span>
+              <span class="feas-dot" :style="{ color: feasColorCss(p.id) }"
+                >&#9679;</span
+              >
               <strong>{{ p.name }}</strong>
               <span v-if="p.category" class="category">{{ p.category }}</span>
-              <span v-if="p.opening_hours" class="hours">{{ p.opening_hours }}</span>
-              <span v-if="feasReason(p.id)" class="feas-reason">{{ feasReason(p.id) }}</span>
+              <span v-if="p.opening_hours" class="hours">{{
+                p.opening_hours
+              }}</span>
+              <span v-if="feasReason(p.id)" class="feas-reason">{{
+                feasReason(p.id)
+              }}</span>
             </div>
             <div class="place-controls">
-              <select :value="p.priority || 'want'" @change="handlePriorityChange(p, $event.target.value)">
+              <select
+                :value="p.priority || 'want'"
+                @change="handlePriorityChange(p, $event.target.value)"
+              >
                 <option value="must">Must</option>
                 <option value="want">Want</option>
                 <option value="if_time">If time</option>
@@ -669,8 +855,19 @@ onUnmounted(() => {
                 @blur="handleDurationChange(p, $event.target.value)"
               />
               <span class="duration-label">min</span>
-              <button class="btn btn-small btn-skip" @click="handleCheckin(p.id, 'skipped')" :disabled="checkinLoading">Skip</button>
-              <button class="btn btn-danger btn-small" @click="handleDeletePlace(p.id)">Remove</button>
+              <button
+                class="btn btn-small btn-skip"
+                @click="handleCheckin(p.id, 'skipped')"
+                :disabled="checkinLoading"
+              >
+                Skip
+              </button>
+              <button
+                class="btn btn-danger btn-small"
+                @click="handleDeletePlace(p.id)"
+              >
+                Remove
+              </button>
             </div>
           </li>
         </ul>
@@ -678,11 +875,13 @@ onUnmounted(() => {
 
       <!-- Completed -->
       <div v-if="donePlaces.length" class="place-section">
-        <h3 class="section-title section-done">Completed ({{ donePlaces.length }})</h3>
+        <h3 class="section-title section-done">
+          Completed ({{ donePlaces.length }})
+        </h3>
         <ul class="place-list">
           <li v-for="p in donePlaces" :key="p.id" class="place-item place-done">
             <div class="place-info">
-              <span class="feas-dot" style="color: #22c55e;">&#10003;</span>
+              <span class="feas-dot" style="color: #22c55e">&#10003;</span>
               <strong>{{ p.name }}</strong>
               <span v-if="p.category" class="category">{{ p.category }}</span>
             </div>
@@ -692,11 +891,17 @@ onUnmounted(() => {
 
       <!-- Skipped -->
       <div v-if="skippedPlaces.length" class="place-section">
-        <h3 class="section-title section-skipped">Skipped ({{ skippedPlaces.length }})</h3>
+        <h3 class="section-title section-skipped">
+          Skipped ({{ skippedPlaces.length }})
+        </h3>
         <ul class="place-list">
-          <li v-for="p in skippedPlaces" :key="p.id" class="place-item place-skipped">
+          <li
+            v-for="p in skippedPlaces"
+            :key="p.id"
+            class="place-item place-skipped"
+          >
             <div class="place-info">
-              <span class="feas-dot" style="color: #9ca3af;">&#10005;</span>
+              <span class="feas-dot" style="color: #9ca3af">&#10005;</span>
               <strong>{{ p.name }}</strong>
               <span v-if="p.category" class="category">{{ p.category }}</span>
             </div>
@@ -741,6 +946,31 @@ onUnmounted(() => {
 .trip-header p {
   color: var(--text);
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.mode-select {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mode-select:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.mode-loading {
+  font-size: 12px;
+  color: var(--text);
+  font-style: italic;
 }
 
 .time-budget {
@@ -916,8 +1146,13 @@ onUnmounted(() => {
   cursor: pointer;
   transition: background 0.2s;
 }
-.btn-next:hover { background: #d97706; }
-.btn-next:disabled { opacity: 0.6; cursor: wait; }
+.btn-next:hover {
+  background: #d97706;
+}
+.btn-next:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
 
 .next-card {
   position: relative;
@@ -957,9 +1192,19 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 2px;
 }
-.next-details strong { color: var(--text-h); font-size: 15px; }
-.next-travel { font-size: 13px; color: var(--text); }
-.next-reason { font-size: 12px; color: var(--text); font-style: italic; }
+.next-details strong {
+  color: var(--text-h);
+  font-size: 15px;
+}
+.next-travel {
+  font-size: 13px;
+  color: var(--text);
+}
+.next-reason {
+  font-size: 12px;
+  color: var(--text);
+  font-style: italic;
+}
 
 .next-actions {
   display: flex;
@@ -973,8 +1218,17 @@ onUnmounted(() => {
   border-top: 1px solid var(--border);
   font-size: 13px;
 }
-.next-alts-label { font-weight: 600; color: var(--text-h); display: block; margin-bottom: 4px; }
-.next-alt-item { display: block; color: var(--text); padding: 2px 0; }
+.next-alts-label {
+  font-weight: 600;
+  color: var(--text-h);
+  display: block;
+  margin-bottom: 4px;
+}
+.next-alt-item {
+  display: block;
+  color: var(--text);
+  padding: 2px 0;
+}
 
 .next-empty {
   font-size: 14px;
@@ -987,8 +1241,12 @@ onUnmounted(() => {
   animation: pulse-ring 1.5s ease-out infinite;
 }
 @keyframes pulse-ring {
-  0% { opacity: 1; }
-  100% { opacity: 0.3; }
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.3;
+  }
 }
 
 .alert-banner {
@@ -1018,8 +1276,14 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 @keyframes alert-slide-in {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .error {

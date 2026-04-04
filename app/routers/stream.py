@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from sse_starlette.sse import EventSourceResponse
@@ -16,13 +17,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 # Color severity ordering for detecting degradation
-_COLOR_RANK = {"green": 0, "unknown": 1, "yellow": 2, "red": 3, "gray": 4}
+_COLOR_RANK: dict[str, int] = {
+    "green": 0,
+    "unknown": 1,
+    "yellow": 2,
+    "red": 3,
+    "gray": 4,
+}
 
 STREAM_INTERVAL_SECONDS = 60
 
 
 def _detect_alerts(
-    results: list[dict],
+    results: list[dict[str, Any]],
     last_colors: dict[int, str],
     place_names: dict[int, str],
     place_priorities: dict[int, str],
@@ -31,38 +38,59 @@ def _detect_alerts(
     alerts: list[UrgencyAlert] = []
 
     for r in results:
-        pid = r["place_id"]
-        color = r["color"]
-        old_color = last_colors.get(pid)
-        name = place_names.get(pid, f"Place {pid}")
-        closing = r.get("closing_urgency_minutes")
+        pid: int = r["place_id"]
+        color: str = r["color"]
+        old_color: str | None = last_colors.get(pid)
+        pid_name: str | None = place_names.get(pid)
+        name: str = pid_name if pid_name is not None else f"Place {pid}"
+        closing: float | None = r.get("closing_urgency_minutes")
 
         # Color degradation alert
         if old_color and _COLOR_RANK.get(color, 0) > _COLOR_RANK.get(old_color, 0):
             if color == "gray":
-                alerts.append(UrgencyAlert(
-                    place_id=pid, place_name=name,
-                    message="no longer reachable in time",
-                    severity="critical",
-                ))
+                alerts.append(
+                    UrgencyAlert(
+                        place_id=pid,
+                        place_name=name,
+                        message="no longer reachable in time",
+                        severity="critical",
+                    )
+                )
             elif color == "red":
-                msg = f"closes in {int(closing)} min — leave now or you'll miss it" if closing else "very tight on time"
-                alerts.append(UrgencyAlert(
-                    place_id=pid, place_name=name,
-                    message=msg, severity="critical",
-                ))
+                msg = (
+                    f"closes in {int(closing)} min — leave now or you'll miss it"
+                    if closing
+                    else "very tight on time"
+                )
+                alerts.append(
+                    UrgencyAlert(
+                        place_id=pid,
+                        place_name=name,
+                        message=msg,
+                        severity="critical",
+                    )
+                )
             elif color == "yellow":
-                msg = f"closes in {int(closing)} min — consider going soon" if closing else "limited time remaining"
-                alerts.append(UrgencyAlert(
-                    place_id=pid, place_name=name,
-                    message=msg, severity="warning",
-                ))
+                msg = (
+                    f"closes in {int(closing)} min — consider going soon"
+                    if closing
+                    else "limited time remaining"
+                )
+                alerts.append(
+                    UrgencyAlert(
+                        place_id=pid,
+                        place_name=name,
+                        message=msg,
+                        severity="warning",
+                    )
+                )
 
         # Must-visit urgency (independent of color change)
         if place_priorities.get(pid) == "must" and closing is not None:
             if closing < 30 and color != "gray":
                 alert = UrgencyAlert(
-                    place_id=pid, place_name=name,
+                    place_id=pid,
+                    place_name=name,
                     message=f"must-visit closes in {int(closing)} min — go now!",
                     severity="critical",
                 )
@@ -70,7 +98,8 @@ def _detect_alerts(
                     alerts.append(alert)
             elif closing < 60 and color != "gray":
                 alert = UrgencyAlert(
-                    place_id=pid, place_name=name,
+                    place_id=pid,
+                    place_name=name,
                     message=f"must-visit closes in {int(closing)} min — plan accordingly",
                     severity="warning",
                 )
@@ -87,10 +116,10 @@ async def trip_stream(
     lat: float | None = Query(None),
     lon: float | None = Query(None),
     db: aiosqlite.Connection = Depends(get_db),
-):
+) -> EventSourceResponse:
     """SSE stream that pushes feasibility updates and urgency alerts."""
 
-    async def event_generator():
+    async def event_generator() -> Any:
         last_colors: dict[int, str] = {}
 
         while True:
@@ -99,8 +128,11 @@ async def trip_stream(
                 break
 
             try:
-                response, place_names, place_priorities = await compute_feasibility(
-                    db, trip_id, lat, lon,
+                response, ctx = await compute_feasibility(
+                    db,
+                    trip_id,
+                    lat,
+                    lon,
                 )
 
                 # Send feasibility update
@@ -110,8 +142,12 @@ async def trip_stream(
                 }
 
                 # Detect and send urgency alerts
-                result_dicts = [r.model_dump() for r in response.places]
-                alerts = _detect_alerts(result_dicts, last_colors, place_names, place_priorities)
+                result_dicts: list[dict[str, Any]] = [
+                    r.model_dump() for r in response.places
+                ]
+                alerts: list[UrgencyAlert] = _detect_alerts(
+                    result_dicts, last_colors, ctx.place_names, ctx.place_priorities
+                )
                 for alert in alerts:
                     yield {
                         "event": "urgency_alert",
@@ -123,11 +159,13 @@ async def trip_stream(
                     last_colors[r.place_id] = r.color
 
             except Exception:
-                logger.exception("Error computing feasibility in SSE stream for trip %s", trip_id)
+                logger.exception(
+                    "Error computing feasibility in SSE stream for trip %s", trip_id
+                )
 
             try:
                 await asyncio.sleep(STREAM_INTERVAL_SECONDS)
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
                 break
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(event_generator())  # type: ignore[arg-type]

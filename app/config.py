@@ -14,7 +14,9 @@ class Settings(BaseSettings):
 
     database_path: str = "./data/pathfinder.db"
 
-    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8"
+    )
 
 
 settings = Settings()

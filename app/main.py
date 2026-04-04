@@ -7,13 +7,20 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db
+from app.http_client import close_http_client, init_http_client
 from app.routers import checkin, feasibility, next_action, places, search, stream, trips
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize database and shared HTTP client on startup
     await init_db()
-    yield
+    await init_http_client()
+    try:
+        yield
+    finally:
+        # Close shared HTTP client on shutdown
+        await close_http_client()
 
 
 app = FastAPI(title="PathFinder v2", lifespan=lifespan)

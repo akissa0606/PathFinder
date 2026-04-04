@@ -1,14 +1,18 @@
 """OSRM service — travel time matrix for foot/car/bicycle profiles."""
 
-from typing import cast
+from typing import Any, cast
 
 import httpx
 
 from app.config import settings
 
+# Prefer using a shared AsyncClient created at app startup for connection reuse.
+# The shared client is optional; fall back to short-lived clients when not present.
+from app.http_client import client_instance
+
 
 def _base_url(profile: str) -> str:
-    urls = {
+    urls: dict[str, str] = {
         "foot": settings.osrm_foot_url,
         "car": settings.osrm_car_url,
         "bicycle": settings.osrm_bicycle_url,
@@ -27,6 +31,12 @@ async def get_distance_matrix(
     """
     Fetch a travel time matrix from OSRM for the given coordinates.
 
+    Behavior improvements:
+    - Validate input coordinates and raise clear ValueError on bad input.
+    - Reuse a shared AsyncClient (if initialized) to reduce connection churn.
+    - Handle common httpx errors and raise ValueError for OSRM error responses.
+    - Keep previous semantics for unreachable pairs (penalty substitution).
+
     Args:
         coordinates: Sequence of (longitude, latitude) pairs. OSRM uses lon,lat order.
         profile: Transport mode — "foot", "car", or "bicycle".
@@ -36,46 +46,88 @@ async def get_distance_matrix(
         Unreachable pairs are replaced with a large penalty value.
 
     Raises:
-        httpx.HTTPStatusError: On HTTP errors (e.g. 429 rate limit).
-        ValueError: On OSRM error responses.
+        ValueError: On invalid input or OSRM error responses.
     """
-    if not coordinates:
+    # Input validation
+    if coordinates is None:
+        raise ValueError("coordinates must be provided")
+    if not isinstance(coordinates, list):
+        raise ValueError("coordinates must be a list of [lon, lat] pairs")
+    if len(coordinates) == 0:
         return []
+    # Validate each coordinate pair
+    for idx, c in enumerate(coordinates):
+        if (
+            not isinstance(c, (list, tuple))
+            or len(c) != 2
+            or not isinstance(c[0], (int, float))
+            or not isinstance(c[1], (int, float))
+        ):
+            raise ValueError(
+                f"coordinates[{idx}] must be [lon, lat] with numeric values"
+            )
 
     if len(coordinates) == 1:
-        return [[0]]
+        return [[0.0]]
 
-    coord_str = ";".join(f"{lon},{lat}" for lon, lat in coordinates)
-    url = f"{_base_url(profile)}/table/v1/{profile}/{coord_str}?annotations=duration"
+    coord_str: str = ";".join(f"{float(lon)},{float(lat)}" for lon, lat in coordinates)
+    url: str = (
+        f"{_base_url(profile)}/table/v1/{profile}/{coord_str}?annotations=duration"
+    )
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.json()
+    # Try to use the shared client if available (initialized at app startup).
+    shared_client = client_instance()
+    resp_data: dict[str, Any] | None = None
 
-    if data.get("code") != "Ok":
-        msg = data.get("message", "Unknown OSRM error")
+    try:
+        if shared_client is not None:
+            response = await shared_client.get(url)
+            response.raise_for_status()
+            resp_data = response.json()
+        else:
+            # Fallback to short-lived client
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                resp_data = response.json()
+    except httpx.HTTPStatusError as exc:
+        # Surface OSRM's API message when available
+        data: dict[str, Any] | None = None
+        try:
+            data = exc.response.json()
+        except Exception:
+            data = None
+        msg: str = (data.get("message") if isinstance(data, dict) else None) or str(exc)
+        raise ValueError(f"OSRM HTTP error: {msg}") from exc
+    except httpx.RequestError as exc:
+        raise ValueError(f"OSRM request error: {exc}") from exc
+
+    if not isinstance(resp_data, dict):
+        raise ValueError("OSRM returned non-JSON response")
+
+    if resp_data.get("code") != "Ok":
+        msg = resp_data.get("message", "Unknown OSRM error")
         raise ValueError(f"OSRM error: {msg}")
 
-    raw_durations = data.get("durations")
+    raw_durations: Any = resp_data.get("durations")
     if raw_durations is None:
         raise ValueError("OSRM response missing 'durations' field")
-    durations = cast(list[list[float | None]], raw_durations)
 
-    max_duration = 0.0
+    # Normalize and compute penalty
+    durations: list[list[float | None]] = cast(list[list[float | None]], raw_durations)
+    max_duration: float = 0.0
     for row in durations:
         for val in row:
             if val is not None:
-                max_duration = max(max_duration, val)
+                try:
+                    max_duration = max(max_duration, float(val))
+                except Exception:
+                    continue
 
-    # Unreachable pairs get a penalty large enough to make any route through them
-    # cost-prohibitive. We use 2× the largest real duration as a dynamic floor,
-    # with a hard minimum of 999 999 s (~11.5 days) for sparse matrices where
-    # all real durations might be short.
-    penalty = max(max_duration * 2, 999_999)
+    penalty: float = max(max_duration * 2, 999_999.0)
 
     result: list[list[float]] = []
     for row in durations:
-        result.append([(val if val is not None else penalty) for val in row])
+        result.append([(float(val) if val is not None else penalty) for val in row])
 
     return result

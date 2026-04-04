@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,26 +49,26 @@ async def checkin(
     if not row:
         raise HTTPException(status_code=404, detail="Place not found")
 
-    place = dict(row)
-    current_status = place["status"]
-    action = body.action
+    place: dict[str, Any] = dict(row)  # type: ignore[arg-type]
+    current_status: str = place["status"]
+    action: str = body.action
 
     # Validate transition
-    allowed = VALID_TRANSITIONS.get(current_status, set())
+    allowed: set[str] = VALID_TRANSITIONS.get(current_status, set())
     if action not in allowed:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot '{action}' a place that is '{current_status}'",
         )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now: str = datetime.now(timezone.utc).isoformat()
 
     if action == "arrived":
         _ = await db.execute(
             "UPDATE places SET status = 'visiting', arrived_at = ? WHERE id = ?",
             (now, body.place_id),
         )
-        message = f"Arrived at {place['name']}"
+        message: str = f"Arrived at {place['name']}"
 
     elif action == "done":
         _ = await db.execute(
@@ -90,7 +91,7 @@ async def checkin(
 
     # Re-read updated place
     cursor = await db.execute("SELECT * FROM places WHERE id = ?", (body.place_id,))
-    updated = dict(await cursor.fetchone())  # type: ignore[arg-type]
+    updated: dict[str, Any] = dict(await cursor.fetchone())  # type: ignore[arg-type]
 
     return CheckinResponse(
         place_id=updated["id"],

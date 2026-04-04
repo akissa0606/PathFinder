@@ -1,183 +1,212 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { createTrip, geocode } from '../api.js'
-import L from 'leaflet'
+import { ref, onMounted, onUnmounted, watch } from "vue";
+import { useRouter } from "vue-router";
+import { createTrip, geocode } from "../api.js";
+import L from "leaflet";
 
 // Fix Leaflet default marker icon paths
-delete L.Icon.Default.prototype._getIconUrl
+delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href,
-  iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).href,
-  shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).href,
-})
+  iconRetinaUrl: new URL(
+    "leaflet/dist/images/marker-icon-2x.png",
+    import.meta.url,
+  ).href,
+  iconUrl: new URL("leaflet/dist/images/marker-icon.png", import.meta.url).href,
+  shadowUrl: new URL("leaflet/dist/images/marker-shadow.png", import.meta.url)
+    .href,
+});
 
 const markerIconOpts = {
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
-}
+  shadowUrl:
+    "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+};
 const greenIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
   ...markerIconOpts,
-})
+});
 const redIcon = new L.Icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  iconUrl:
+    "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png",
   ...markerIconOpts,
-})
+});
 
-const router = useRouter()
+const router = useRouter();
 
-const city = ref('')
-const date = ref('')
-const startTime = ref('09:00')
-const endTime = ref('18:00')
-const transport = ref('foot')
-const startLat = ref('')
-const startLon = ref('')
-const endLat = ref('')
-const endLon = ref('')
-const sameAsStart = ref(true)
-const loading = ref(false)
-const error = ref('')
+const city = ref("");
+const date = ref("");
+const startTime = ref("09:00");
+const endTime = ref("18:00");
+const transport = ref("foot");
+const startLat = ref("");
+const startLon = ref("");
+const endLat = ref("");
+const endLon = ref("");
+const sameAsStart = ref(true);
+const loading = ref(false);
+const error = ref("");
 
 // Geocode search state
-const startSearch = ref('')
-const endSearch = ref('')
-const startResults = ref([])
-const endResults = ref([])
-const startAddress = ref('')
-const endAddress = ref('')
-const mapMode = ref('start') // 'start' or 'end'
+const startSearch = ref("");
+const endSearch = ref("");
+const startResults = ref([]);
+const endResults = ref([]);
+const startAddress = ref("");
+const endAddress = ref("");
+const mapMode = ref("start"); // 'start' or 'end'
 
-let map = null
-let startMarker = null
-let endMarker = null
-let debounceTimer = null
+let map = null;
+let startMarker = null;
+let endMarker = null;
+let debounceTimer = null;
 
 function initMap() {
-  map = L.map('home-map').setView([47.4979, 19.0402], 13)
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors',
-  }).addTo(map)
+  map = L.map("home-map").setView([47.4979, 19.0402], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(map);
 
-  map.on('click', (e) => {
-    const { lat, lng } = e.latlng
-    if (mapMode.value === 'start') {
-      setStartPosition(lat, lng)
-      startAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+  map.on("click", (e) => {
+    const { lat, lng } = e.latlng;
+    if (mapMode.value === "start") {
+      setStartPosition(lat, lng);
+      startAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     } else {
-      setEndPosition(lat, lng)
-      endAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+      setEndPosition(lat, lng);
+      endAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     }
-  })
+  });
 }
 
 function setStartPosition(lat, lon) {
-  startLat.value = lat.toFixed(6)
-  startLon.value = lon.toFixed(6)
+  startLat.value = lat.toFixed(6);
+  startLon.value = lon.toFixed(6);
   if (startMarker) {
-    startMarker.setLatLng([lat, lon])
+    startMarker.setLatLng([lat, lon]);
   } else {
-    startMarker = L.marker([lat, lon], { icon: greenIcon, draggable: true }).addTo(map)
-    startMarker.bindPopup('Start').openPopup()
-    startMarker.on('dragend', () => {
-      const pos = startMarker.getLatLng()
-      startLat.value = pos.lat.toFixed(6)
-      startLon.value = pos.lng.toFixed(6)
-      startAddress.value = `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`
-    })
+    startMarker = L.marker([lat, lon], {
+      icon: greenIcon,
+      draggable: true,
+    }).addTo(map);
+    startMarker.bindPopup("Start").openPopup();
+    startMarker.on("dragend", () => {
+      const pos = startMarker.getLatLng();
+      startLat.value = pos.lat.toFixed(6);
+      startLon.value = pos.lng.toFixed(6);
+      startAddress.value = `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`;
+    });
   }
   if (sameAsStart.value) {
-    setEndPosition(lat, lon)
+    setEndPosition(lat, lon);
   }
 }
 
 function setEndPosition(lat, lon) {
-  endLat.value = lat.toFixed(6)
-  endLon.value = lon.toFixed(6)
+  endLat.value = lat.toFixed(6);
+  endLon.value = lon.toFixed(6);
   if (sameAsStart.value) {
-    if (endMarker) { endMarker.remove(); endMarker = null }
-    return
+    if (endMarker) {
+      endMarker.remove();
+      endMarker = null;
+    }
+    return;
   }
   if (endMarker) {
-    endMarker.setLatLng([lat, lon])
+    endMarker.setLatLng([lat, lon]);
   } else {
-    endMarker = L.marker([lat, lon], { icon: redIcon, draggable: true }).addTo(map)
-    endMarker.bindPopup('End')
-    endMarker.on('dragend', () => {
-      const pos = endMarker.getLatLng()
-      endLat.value = pos.lat.toFixed(6)
-      endLon.value = pos.lng.toFixed(6)
-      endAddress.value = `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`
-    })
+    endMarker = L.marker([lat, lon], { icon: redIcon, draggable: true }).addTo(
+      map,
+    );
+    endMarker.bindPopup("End");
+    endMarker.on("dragend", () => {
+      const pos = endMarker.getLatLng();
+      endLat.value = pos.lat.toFixed(6);
+      endLon.value = pos.lng.toFixed(6);
+      endAddress.value = `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`;
+    });
   }
 }
 
 watch(sameAsStart, (val) => {
   if (val) {
-    if (endMarker) { endMarker.remove(); endMarker = null }
-    endLat.value = startLat.value
-    endLon.value = startLon.value
+    if (endMarker) {
+      endMarker.remove();
+      endMarker = null;
+    }
+    endLat.value = startLat.value;
+    endLon.value = startLon.value;
   }
-})
+});
 
 function debounceGeocode(query, resultRef) {
-  clearTimeout(debounceTimer)
-  if (!query || query.length < 2) { resultRef.value = []; return }
+  clearTimeout(debounceTimer);
+  if (!query || query.length < 2) {
+    resultRef.value = [];
+    return;
+  }
   debounceTimer = setTimeout(async () => {
     try {
-      resultRef.value = await geocode(query)
+      resultRef.value = await geocode(query);
     } catch {
-      resultRef.value = []
+      resultRef.value = [];
     }
-  }, 300)
+  }, 300);
 }
 
-watch(startSearch, (val) => debounceGeocode(val, startResults))
-watch(endSearch, (val) => debounceGeocode(val, endResults))
+watch(startSearch, (val) => debounceGeocode(val, startResults));
+watch(endSearch, (val) => debounceGeocode(val, endResults));
 
 function selectStartResult(r) {
-  startSearch.value = ''
-  startResults.value = []
-  startAddress.value = r.name
-  setStartPosition(r.lat, r.lon)
-  map.setView([r.lat, r.lon], 15)
+  startSearch.value = "";
+  startResults.value = [];
+  startAddress.value = r.name;
+  setStartPosition(r.lat, r.lon);
+  map.setView([r.lat, r.lon], 15);
 }
 
 function selectEndResult(r) {
-  endSearch.value = ''
-  endResults.value = []
-  endAddress.value = r.name
-  setEndPosition(r.lat, r.lon)
-  map.setView([r.lat, r.lon], 15)
+  endSearch.value = "";
+  endResults.value = [];
+  endAddress.value = r.name;
+  setEndPosition(r.lat, r.lon);
+  map.setView([r.lat, r.lon], 15);
 }
 
 function useMyLocation() {
-  if (!navigator.geolocation) { error.value = 'Geolocation not supported'; return }
+  if (!navigator.geolocation) {
+    error.value = "Geolocation not supported";
+    return;
+  }
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      setStartPosition(pos.coords.latitude, pos.coords.longitude)
-      startAddress.value = 'Current location'
-      map.setView([pos.coords.latitude, pos.coords.longitude], 15)
+      setStartPosition(pos.coords.latitude, pos.coords.longitude);
+      startAddress.value = "Current location";
+      map.setView([pos.coords.latitude, pos.coords.longitude], 15);
     },
-    (err) => { error.value = `Location error: ${err.message}` }
-  )
+    (err) => {
+      error.value = `Location error: ${err.message}`;
+    },
+  );
 }
 
 async function submit() {
-  error.value = ''
+  error.value = "";
   if (!city.value || !date.value || !startLat.value || !startLon.value) {
-    error.value = 'Please fill in all required fields'
-    return
+    error.value = "Please fill in all required fields";
+    return;
   }
-  const eLat = sameAsStart.value ? startLat.value : endLat.value
-  const eLon = sameAsStart.value ? startLon.value : endLon.value
+  const eLat = sameAsStart.value ? startLat.value : endLat.value;
+  const eLon = sameAsStart.value ? startLon.value : endLon.value;
   if (!eLat || !eLon) {
-    error.value = 'Please provide end location'
-    return
+    error.value = "Please provide end location";
+    return;
   }
 
-  loading.value = true
+  loading.value = true;
   try {
     const trip = await createTrip({
       city: city.value,
@@ -189,20 +218,25 @@ async function submit() {
       start_lon: parseFloat(startLon.value),
       end_lat: parseFloat(eLat),
       end_lon: parseFloat(eLon),
-    })
-    router.push(`/trip/${trip.id}`)
+    });
+    router.push(`/trip/${trip.id}`);
   } catch (e) {
-    error.value = `Failed to create trip: ${e.message}`
+    error.value = `Failed to create trip: ${e.message}`;
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
-onMounted(() => { initMap() })
+onMounted(() => {
+  initMap();
+});
 onUnmounted(() => {
-  clearTimeout(debounceTimer)
-  if (map) { map.remove(); map = null }
-})
+  clearTimeout(debounceTimer);
+  if (map) {
+    map.remove();
+    map = null;
+  }
+});
 </script>
 
 <template>
@@ -214,7 +248,13 @@ onUnmounted(() => {
       <form class="trip-form" @submit.prevent="submit">
         <div class="form-group">
           <label for="city">City</label>
-          <input id="city" v-model="city" type="text" placeholder="e.g. Budapest" required />
+          <input
+            id="city"
+            v-model="city"
+            type="text"
+            placeholder="e.g. Budapest"
+            required
+          />
         </div>
 
         <div class="form-row">
@@ -251,14 +291,22 @@ onUnmounted(() => {
               autocomplete="off"
             />
             <ul v-if="startResults.length" class="autocomplete-list">
-              <li v-for="(r, i) in startResults" :key="i" @click="selectStartResult(r)">
+              <li
+                v-for="(r, i) in startResults"
+                :key="i"
+                @click="selectStartResult(r)"
+              >
                 {{ r.name }}
               </li>
             </ul>
           </div>
           <p v-if="startAddress" class="selected-address">{{ startAddress }}</p>
-          <p v-if="startLat && startLon" class="coords-display">{{ startLat }}, {{ startLon }}</p>
-          <a class="geo-link" href="#" @click.prevent="useMyLocation">Use my location</a>
+          <p v-if="startLat && startLon" class="coords-display">
+            {{ startLat }}, {{ startLon }}
+          </p>
+          <a class="geo-link" href="#" @click.prevent="useMyLocation"
+            >Use my location</a
+          >
         </fieldset>
 
         <fieldset>
@@ -276,13 +324,19 @@ onUnmounted(() => {
                 autocomplete="off"
               />
               <ul v-if="endResults.length" class="autocomplete-list">
-                <li v-for="(r, i) in endResults" :key="i" @click="selectEndResult(r)">
+                <li
+                  v-for="(r, i) in endResults"
+                  :key="i"
+                  @click="selectEndResult(r)"
+                >
                   {{ r.name }}
                 </li>
               </ul>
             </div>
             <p v-if="endAddress" class="selected-address">{{ endAddress }}</p>
-            <p v-if="endLat && endLon" class="coords-display">{{ endLat }}, {{ endLon }}</p>
+            <p v-if="endLat && endLon" class="coords-display">
+              {{ endLat }}, {{ endLon }}
+            </p>
           </template>
         </fieldset>
 
@@ -290,20 +344,32 @@ onUnmounted(() => {
           <span>Click map to set:</span>
           <button
             type="button"
-            :class="['btn', 'btn-small', mapMode === 'start' ? 'btn-primary' : 'btn-secondary']"
+            :class="[
+              'btn',
+              'btn-small',
+              mapMode === 'start' ? 'btn-primary' : 'btn-secondary',
+            ]"
             @click="mapMode = 'start'"
-          >Set start</button>
+          >
+            Set start
+          </button>
           <button
             type="button"
-            :class="['btn', 'btn-small', mapMode === 'end' ? 'btn-primary' : 'btn-secondary']"
+            :class="[
+              'btn',
+              'btn-small',
+              mapMode === 'end' ? 'btn-primary' : 'btn-secondary',
+            ]"
             @click="mapMode = 'end'"
-          >Set end</button>
+          >
+            Set end
+          </button>
         </div>
 
         <p v-if="error" class="error">{{ error }}</p>
 
         <button type="submit" class="btn btn-primary" :disabled="loading">
-          {{ loading ? 'Creating...' : 'Create Trip' }}
+          {{ loading ? "Creating..." : "Create Trip" }}
         </button>
       </form>
     </div>
@@ -397,7 +463,8 @@ label {
   cursor: pointer;
 }
 
-input, select {
+input,
+select {
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -406,7 +473,8 @@ input, select {
   font-size: 15px;
 }
 
-input:focus, select:focus {
+input:focus,
+select:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -425,7 +493,7 @@ input:focus, select:focus {
   max-height: 200px;
   overflow-y: auto;
   z-index: 1000;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .autocomplete-list li {

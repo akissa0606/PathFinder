@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import aiosqlite
 
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS trips (
     end_time TEXT NOT NULL,
     date TEXT NOT NULL,
     transport_mode TEXT NOT NULL DEFAULT 'foot',
+    timezone TEXT NOT NULL DEFAULT 'UTC',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -64,17 +66,58 @@ async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
         await db.close()
 
 
+async def _ensure_timezone_column(db: aiosqlite.Connection) -> None:
+    """
+    Ensure `timezone` column exists on `trips`. Adds it if missing.
+
+    Works with either default tuple rows returned by PRAGMA or with Row mappings.
+    """
+    cursor = await db.execute("PRAGMA table_info(trips)")
+    rows = await cursor.fetchall()
+
+    col_names: list[Any] = []
+    for row in rows:
+        # PRAGMA table_info returns rows where column name is either accessible
+        # by index 1 (tuple) or by key "name" (mapping). Handle both.
+        try:
+            name = row["name"]  # type: ignore[index]
+        except Exception:
+            name = row[1]  # type: ignore[index]
+        col_names.append(name)
+
+    if "timezone" not in col_names:
+        await db.execute(
+            "ALTER TABLE trips ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'"
+        )
+
+
 async def init_db() -> None:
-    """Create all tables if they don't exist. Safe to call on every startup."""
+    """Create all tables if they don't exist. Safe to call on every startup.
+
+    Performs a light, backward-compatible migration: if an existing `trips`
+    table lacks a `timezone` column, the column will be added with default 'UTC'.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(settings.database_path)), exist_ok=True)
     async with aiosqlite.connect(settings.database_path) as db:
-        _ = await db.execute(CREATE_TRIPS)
-        _ = await db.execute(CREATE_PLACES)
-        _ = await db.execute(CREATE_DISTANCE_CACHE)
-        _ = await db.execute(
+        # Use Row mapping for convenience when inspecting PRAGMA results.
+        db.row_factory = aiosqlite.Row
+
+        # Ensure base tables exist (CREATE TABLE IF NOT EXISTS)
+        await db.execute(CREATE_TRIPS)
+
+        # If an older DB existed without the timezone column, add it.
+        # _ensure_timezone_column inspects PRAGMA table_info and executes ALTER TABLE if needed.
+        await _ensure_timezone_column(db)
+
+        await db.execute(CREATE_PLACES)
+        await db.execute(CREATE_DISTANCE_CACHE)
+
+        # Indexes for performance
+        await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_places_trip_id ON places(trip_id)"
         )
-        _ = await db.execute(
+        await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_distance_cache_trip_id ON distance_cache(trip_id)"
         )
+
         await db.commit()

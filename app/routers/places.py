@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -48,33 +49,36 @@ async def _cache_distances_background(
             db.row_factory = _aiosqlite.Row
             # Get trip for start/end coords and transport mode
             cursor = await db.execute("SELECT * FROM trips WHERE id = ?", (trip_id,))
-            trip = await cursor.fetchone()
-            if not trip:
+            trip_row = await cursor.fetchone()
+            if not trip_row:
                 return
-            trip = dict(trip)
+            trip: dict[str, Any] = dict(trip_row)  # type: ignore[arg-type]
 
             # Get all places for this trip
             cursor = await db.execute(
                 "SELECT id, lat, lon FROM places WHERE trip_id = ?", (trip_id,)
             )
-            all_places = [dict(r) for r in await cursor.fetchall()]
+            rows = await cursor.fetchall()
+            all_places: list[dict[str, Any]] = [dict(r) for r in rows]  # type: ignore[arg-type]
 
             if len(all_places) < 2:
                 # Only the new place exists, nothing to compute distances to
                 return
 
             # Build coordinate list: all places
-            coords = [[p["lon"], p["lat"]] for p in all_places]
-            profile = trip["transport_mode"]
+            coords: list[list[float]] = [[p["lon"], p["lat"]] for p in all_places]
+            profile: str = trip["transport_mode"]
 
-            matrix = await get_distance_matrix(coords, profile)
+            matrix: list[list[float]] = await get_distance_matrix(coords, profile)
 
             # Cache all pairs involving the new place
-            new_idx = next(
+            new_idx: int | None = next(
                 (i for i, p in enumerate(all_places) if p["id"] == place_id), None
             )
             if new_idx is None:
-                logger.warning("Place %d not found in all_places; skipping cache", place_id)
+                logger.warning(
+                    "Place %d not found in all_places; skipping cache", place_id
+                )
                 return
 
             for i, p in enumerate(all_places):
@@ -100,9 +104,7 @@ async def _cache_distances_background(
         logger.exception("Failed to cache distances for place %d", place_id)
 
 
-@router.post(
-    "/trips/{trip_id}/places", response_model=PlaceResponse, status_code=201
-)
+@router.post("/trips/{trip_id}/places", response_model=PlaceResponse, status_code=201)
 async def add_place(
     trip_id: str,
     body: PlaceAdd,
@@ -188,9 +190,7 @@ async def delete_place(
     await db.commit()
 
 
-@router.patch(
-    "/trips/{trip_id}/places/{place_id}", response_model=PlaceResponse
-)
+@router.patch("/trips/{trip_id}/places/{place_id}", response_model=PlaceResponse)
 async def update_place(
     trip_id: str,
     place_id: int,
@@ -204,16 +204,22 @@ async def update_place(
     if not row:
         raise HTTPException(status_code=404, detail="Place not found")
 
-    ALLOWED_COLUMNS = {"priority", "estimated_duration_min", "opening_hours", "opening_hours_source"}
-    updates = {
-        k: v for k, v in body.model_dump(exclude_none=True).items()
+    ALLOWED_COLUMNS: set[str] = {
+        "priority",
+        "estimated_duration_min",
+        "opening_hours",
+        "opening_hours_source",
+    }
+    updates: dict[str, Any] = {
+        k: v
+        for k, v in body.model_dump(exclude_none=True).items()
         if k in ALLOWED_COLUMNS
     }
     if not updates:
-        return PlaceResponse(**dict(row))
+        return PlaceResponse(**dict(row))  # type: ignore[arg-type]
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [place_id]
+    set_clause: str = ", ".join(f"{k} = ?" for k in updates)
+    values: list[Any] = list(updates.values()) + [place_id]
     _ = await db.execute(f"UPDATE places SET {set_clause} WHERE id = ?", values)
     await db.commit()
 
@@ -221,4 +227,4 @@ async def update_place(
     updated = await cursor.fetchone()
     if updated is None:
         raise HTTPException(status_code=404, detail="Place not found")
-    return PlaceResponse(**dict(updated))
+    return PlaceResponse(**dict(updated))  # type: ignore[arg-type]

@@ -19,12 +19,14 @@ class TripCreate(BaseModel):
     end_time: str  # "18:00"
     date: str  # "2026-04-15"
     transport_mode: Literal["foot", "car", "bicycle"] = "foot"
+    timezone: str | None = "UTC"
 
 
 class TripUpdate(BaseModel):
     start_time: str | None = None
     end_time: str | None = None
     transport_mode: Literal["foot", "car", "bicycle"] | None = None
+    timezone: str | None = None
 
 
 class TripResponse(BaseModel):
@@ -38,6 +40,7 @@ class TripResponse(BaseModel):
     end_time: str
     date: str
     transport_mode: str
+    timezone: str | None = "UTC"
     created_at: str
     updated_at: str
 
