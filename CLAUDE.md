@@ -1,7 +1,7 @@
 # PathFinder Development Guide
 
 ## Project Overview
-Feasibility-guided exploration engine for trip planning with self-hosted OSRM routing, SQLite persistence, and Google Places API integration.
+Feasibility-guided exploration engine for trip planning with self-hosted OSRM routing, SQLite persistence, and Google Places API integration. Built as a Vue 3 SPA + FastAPI backend with real-time SSE updates.
 
 ## Quick Start
 
@@ -13,6 +13,9 @@ python3 migrate.py
 # Terminal 2: Start backend
 source venv/bin/activate
 uvicorn app.main:app --reload
+
+# Terminal 3: Start frontend dev server (optional — for hot reload)
+cd frontend && npm run dev
 ```
 
 ## Architecture
@@ -23,82 +26,157 @@ uvicorn app.main:app --reload
 | **OSRM Car** | Driving routes | 5001 |
 | **OSRM Bicycle** | Cycling routes | 5002 |
 | **FastAPI** | Backend API | 8000 |
+| **Vite** | Frontend dev server | 5173 |
 | **SQLite** | Persistence | `./data/pathfinder.db` |
-| **Google Places** | Place search & info | API calls |
+| **Google Places** | Opening hours fallback | API calls |
+| **Overpass API** | Opening hours (primary) | API calls |
+| **Nominatim** | Geocoding | API calls |
 
 ### Database Schema
-- **trips**: User trip records with metadata
-- **places**: Location data (coordinates, name, opening hours)
-- **distance_cache**: Cached OSRM results (trip_id, from/to place, duration)
+- **trips**: User trip records (city, coords, times, transport mode, timezone)
+- **places**: Location data (coordinates, name, category, priority, opening hours, status, timestamps)
+- **distance_cache**: Cached OSRM results (trip_id, from/to place, duration_seconds)
 
 ### Code Structure
 ```
 app/
-  ├── config.py          # Pydantic Settings (load .env)
-  ├── db.py              # SQLite schema + init
-  ├── models.py          # Pydantic request/response schemas
-  ├── main.py            # FastAPI app + lifespan
+  ├── config.py              # Pydantic Settings (load .env)
+  ├── db.py                  # SQLite schema + init + migration
+  ├── models.py              # Pydantic request/response schemas
+  ├── main.py                # FastAPI app + lifespan (init DB, HTTP client)
+  ├── http_client.py         # Shared httpx AsyncClient lifecycle
   ├── routers/
-  │   ├── trips.py       # Trip CRUD (/api/trips)
-  │   ├── places.py      # Place CRUD (/api/trips/{id}/places)
-  │   ├── search.py      # POI search + geocode (/api/search, /api/geocode)
-  │   └── feasibility.py # Feasibility scoring (/api/trips/{id}/feasibility)
+  │   ├── trips.py           # Trip CRUD (/api/trips)
+  │   ├── places.py          # Place CRUD (/api/trips/{id}/places)
+  │   ├── search.py          # POI search + geocode (/api/search, /api/geocode)
+  │   ├── feasibility.py     # Feasibility endpoint + compute_feasibility + FeasibilityContext + Haversine fallback
+  │   ├── next_action.py     # "What Next?" recommendations (/api/trips/{id}/next)
+  │   ├── checkin.py         # Check-in state machine (/api/trips/{id}/checkin)
+  │   └── stream.py          # SSE real-time updates (/api/trips/{id}/stream)
   ├── engine/
-  │   ├── feasibility.py      # Core feasibility algorithm
-  │   └── category_defaults.py # Default visit durations per category
+  │   ├── feasibility.py     # Core feasibility algorithm + opening hours parser
+  │   ├── scoring.py         # Opportunity-cost "What Next?" scoring
+  │   └── category_defaults.py # Default visit durations per category (20 categories)
   └── services/
-      ├── osrm.py              # OSRM HTTP client (foot/car/bicycle)
-      ├── overpass.py          # Opening hours via Overpass API (OSM)
-      ├── hours.py             # Hours resolver (Overpass → Google fallback)
-      └── google_places.py     # Google Places opening hours fallback (optional)
+      ├── osrm.py            # OSRM HTTP client (foot/car/bicycle distance matrix)
+      ├── overpass.py         # Opening hours via Overpass API (OSM) with caching + retries
+      ├── hours.py            # Hours resolver (Overpass → Google Places fallback)
+      └── google_places.py   # Google Places opening hours fallback (optional)
+frontend/
+  ├── src/
+  │   ├── main.js            # Vue 3 app entry point
+  │   ├── App.vue            # Root component (router-view)
+  │   ├── router.js          # Vue Router: / and /trip/:id
+  │   ├── api.js             # All API calls + SSE connection helper
+  │   ├── style.css          # Global styles (dark/light theme, buttons)
+  │   └── views/
+  │       ├── Home.vue       # Landing page: trip creation form + map
+  │       └── Dashboard.vue  # Trip dashboard: map, feasibility, search, check-in, recommendations
+  ├── public/
+  │   └── favicon.svg        # App favicon
+  ├── index.html             # HTML entry point
+  ├── package.json           # Vue, Leaflet, Vite, Prettier
+  └── vite.config.js         # Vite config with FastAPI proxy
 tests/
-  ├── test_infrastructure.py  # DB, OSRM, schema tests (Slice 0)
-  ├── test_slice1.py          # Trip/Place CRUD endpoint tests (Slice 1)
-  └── test_slice2.py          # Feasibility engine unit + integration tests (Slice 2)
+  ├── test_infrastructure.py # DB, OSRM, schema tests (Slice 0)
+  ├── test_slice1.py         # Trip/Place CRUD endpoint tests (Slice 1)
+  ├── test_slice2.py         # Feasibility engine unit + integration tests (Slice 2)
+  ├── test_slice3.py         # "What Next?" scoring + /next endpoint tests (Slice 3)
+  ├── test_slice4.py         # SSE urgency alerts + stream tests (Slice 4/5)
+  ├── test_slice6.py         # Transport mode switching tests (Slice 6)
+  └── test_slice7.py         # Edge cases: OSRM fallback, empty states, error responses (Slice 7)
+```
+
+## API Endpoints
+
+### Trip Management
+```
+POST   /api/trips                              → Create trip, returns { id, url }
+GET    /api/trips/{id}                         → Get trip with all places
+PATCH  /api/trips/{id}                         → Update settings (transport_mode, times, timezone)
+DELETE /api/trips/{id}                         → Delete trip + cascade
+```
+
+### Place Management
+```
+POST   /api/trips/{id}/places                  → Add place (triggers hours resolution + distance caching)
+PATCH  /api/trips/{id}/places/{pid}            → Update priority, duration, opening_hours
+DELETE /api/trips/{id}/places/{pid}            → Remove place + clean cache
+```
+
+### Search & Geocoding
+```
+GET    /api/search?q=...&lat=...&lon=...       → Search OSM via Overpass, Nominatim fallback
+GET    /api/geocode?q=...                      → Geocode address via Nominatim
+```
+
+### Check-In
+```
+POST   /api/trips/{id}/checkin                 → { place_id, action: "arrived"|"done"|"skipped" }
+```
+
+### Feasibility & Recommendations
+```
+GET    /api/trips/{id}/feasibility?lat=&lon=   → Feasibility for all pending places
+GET    /api/trips/{id}/next?lat=&lon=          → Top 3 "What Next?" recommendations
+GET    /api/trips/{id}/stream?lat=&lon=        → SSE stream (feasibility_update + urgency_alert events)
+```
+
+### System
+```
+GET    /health                                 → { status: "ok" }
 ```
 
 ## Development Workflow
 
 ### 1. Code Changes
 - Edit files in `app/` — uvicorn auto-reloads on save
+- Edit files in `frontend/src/` — Vite hot-reloads
 - Follow async/await patterns (all I/O is async)
 - Add Pydantic models for new request/response types
 - Use `httpx` for external API calls (not `requests`)
 
 ### 2. Testing
 ```bash
-# Run all tests
+# Run all tests (65 tests)
 pytest tests/ -v
 
-# Run one test file
-pytest tests/test_infrastructure.py -v
+# Run one slice
+pytest tests/test_slice7.py -v
 
 # Run one test
-pytest tests/test_infrastructure.py::test_osrm_foot_responds -v
+pytest tests/test_slice7.py::test_haversine_distance_known_pair -v
 ```
 
-### 3. Verification
+### 3. Linting & Formatting
+```bash
+# Python
+ruff check app/ tests/
+ruff format app/ tests/
+
+# Frontend
+cd frontend && npx prettier --write src/
+```
+
+### 4. Frontend Build
+```bash
+cd frontend && npm run build
+# Output goes to frontend/dist/ — served by FastAPI static mount
+```
+
+### 5. Verification
 ```bash
 # OSRM health
 curl -s "http://localhost:5000/table/v1/foot/19.04,47.50;19.05,47.51" | grep -o '"code":"[^"]*"'
 
 # Backend health
 curl -s "http://localhost:8000/health"
-
-# SQLite tables
-python3 migrate.py
 ```
 
-### 4. Git Workflow
+### 6. Git Workflow
 ```bash
-# Check what changed
-git status
-git diff
-
-# Stage files (never osrm-data/ or .env)
-git add app/ tests/ CLAUDE.md
-
-# Commit with clear message
+git status && git diff
+git add app/ tests/ frontend/src/ CLAUDE.md
 git commit -m "feat: add /trips POST endpoint"
 git push
 ```
@@ -107,10 +185,17 @@ git push
 
 ### Python
 - **Async everywhere**: Use `async def` for I/O, `await` for coroutines
-- **Type hints**: Always annotate function params and returns
+- **Type hints**: Always annotate function params and returns (Pyright standard mode)
 - **Pydantic**: All external data through Pydantic models (validation)
 - **Error handling**: Raise `HTTPException` in route handlers, not generic exceptions
 - **Logging**: Use Python `logging` module, not `print()`
+- **Linter/Formatter**: ruff (not black)
+
+### Frontend
+- **Vue 3 Composition API** with `<script setup>`
+- **No component decomposition** — Home.vue and Dashboard.vue are monolithic views
+- **Leaflet** for maps (imported via npm, not CDN)
+- **Formatter**: Prettier
 
 ### Imports
 ```python
@@ -123,22 +208,38 @@ import aiosqlite
 from dotenv import load_dotenv
 ```
 
-### Dependencies
-- Check `requirements.txt` before adding a new package
-- If it's not actively used, it shouldn't be there
-- Document why pre-emptive dependencies exist (e.g., `sse-starlette` for Slice 1 SSE)
+## Key Implementation Details
+
+### Feasibility Engine
+- **Colors**: green (>30% slack), yellow (10-30%), red (<10% or closing <30min), gray (impossible), unknown (no hours)
+- **Scoring weights**: 40% opportunity cost + 30% proximity + 30% priority
+- **OSRM fallback**: When OSRM is unreachable, falls back to Haversine straight-line estimates with detour factor
+- **Opening hours**: Overpass API (primary) → Google Places (fallback) → unknown
+
+### SSE Stream
+- Pushes `feasibility_update` and `urgency_alert` events every 60 seconds
+- Alerts trigger on color degradation (green→yellow, yellow→red, any→gray)
+- Must-visit places get extra alerts when closing within 30/60 minutes
+
+### Check-In State Machine
+- `pending` → `arrived` (visiting) or `skipped`
+- `visiting` → `done` or `skipped`
+- Invalid transitions return 400
+
+### Transport Mode Switching
+- PATCH trip with new mode → invalidates distance_cache → background recompute via OSRM
 
 ## Important Rules
 
 ### ✅ DO
 - Run `docker compose up -d` before dev work
 - Activate venv before running code: `source venv/bin/activate`
-- Test with `pytest` before committing
+- Run `pytest tests/ -v` before committing
+- Run `ruff check app/ tests/` before committing
 - Use `await` when calling async functions (OSRM, SQLite, httpx)
 - Load config from `app.config.settings` (reads .env)
 
 ### ❌ DON'T
--
 - Commit `osrm-data/` (3GB+ binary files)
 - Commit `.env` (use `.env.example` as template)
 - Use `print()` for debugging (use `logging`)
@@ -167,37 +268,33 @@ DATABASE_PATH=./data/pathfinder.db
 
 | Issue | Impact | Mitigation |
 |-------|--------|-----------|
-| Static mount at `/` may shadow `/health` | Health check may fail if a route is matched by the static file handler | `/health` is registered before the static mount so FastAPI handles it first |
-| OSRM containers have no health checks | Startup race conditions if app and OSRM start together | Manually verify OSRM with curl before testing |
-| Nominatim has no rate-limit guard | Heavy usage may trigger 429s from the public instance | Cache geocode results or self-host Nominatim |
-| All times assumed in user's local timezone | UTC offset not stored; feasibility scoring is timezone-naive | Document assumption in API; add timezone field in a future slice |
+| Static mount at `/` may shadow `/health` | Health check may fail if matched by static handler | `/health` registered before static mount |
+| OSRM containers have no health checks | Startup race conditions | Manually verify OSRM with curl before testing |
+| Nominatim has no rate-limit guard | Heavy usage may trigger 429s | Cache geocode results or self-host |
+| Timezone stored per trip (default UTC) | Feasibility uses trip timezone for opening hours | Set timezone when creating trip |
+| OSRM fallback uses straight-line estimates | Less accurate when OSRM is down | Haversine + 1.4x detour factor + profile-specific speeds |
+| Frontend is two monolithic views | Harder to maintain at scale | Acceptable for thesis scope |
 
 ## Debugging
 
 ### OSRM not responding?
 ```bash
 docker compose ps
-docker logs pathfinder-osrm-foot  # Check for errors
-docker compose restart             # Restart all containers
+docker logs pathfinder-osrm-foot
+docker compose restart
 ```
 
 ### Database errors?
 ```bash
-# Reinitialize (safe — uses CREATE TABLE IF NOT EXISTS)
 python3 migrate.py
-
-# Inspect schema
 sqlite3 ./data/pathfinder.db ".tables"
 sqlite3 ./data/pathfinder.db ".schema trips"
 ```
 
 ### Tests failing?
 ```bash
-# Run with verbose output
 pytest tests/ -vv -s
-
-# Run one test with print statements visible
-pytest tests/test_infrastructure.py::test_name -s
+pytest tests/test_slice7.py::test_name -s
 ```
 
 ## Resources
