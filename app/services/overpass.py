@@ -65,11 +65,24 @@ def _fetch_from_cache(
     return value
 
 
+_CACHE_MAX_SIZE: int = 500  # evict when exceeded
+
+
+def _evict_expired() -> None:
+    """Remove all expired entries from the cache."""
+    now = time.time()
+    expired = [k for k, (ts, _) in _cache.items() if now - ts > _CACHE_TTL]
+    for k in expired:
+        del _cache[k]
+
+
 def _store_in_cache(
     lat: float, lon: float, name: str | None, radius: int, value: dict[str, Any] | None
 ) -> None:
     key = _cache_key(lat, lon, name, radius)
     _cache[key] = (time.time(), value)
+    if len(_cache) > _CACHE_MAX_SIZE:
+        _evict_expired()
 
 
 async def _post_with_retries(

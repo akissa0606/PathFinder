@@ -84,9 +84,7 @@ async def _search_overpass(
     for endpoint in OVERPASS_ENDPOINTS:
         try:
             if client is not None:
-                resp = await client.post(
-                    endpoint, data={"data": query}, timeout=4.0
-                )
+                resp = await client.post(endpoint, data={"data": query}, timeout=4.0)
             else:
                 async with httpx.AsyncClient(timeout=4.0) as tmp:
                     resp = await tmp.post(endpoint, data={"data": query})
@@ -122,9 +120,7 @@ async def _search_nominatim(q: str, lat: float, lon: float) -> list[dict[str, An
                 timeout=5.0,
             )
         else:
-            async with httpx.AsyncClient(
-                timeout=5.0, headers=NOMINATIM_HEADERS
-            ) as tmp:
+            async with httpx.AsyncClient(timeout=5.0, headers=NOMINATIM_HEADERS) as tmp:
                 resp = await tmp.get(
                     "https://nominatim.openstreetmap.org/search",
                     params=nominatim_params,

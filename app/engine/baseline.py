@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def _tour_cost(matrix: list[list[float]], tour: list[int]) -> float:
-    """Total travel time along a tour (sum of consecutive-pair durations)."""
+    """Sum of matrix[tour[i]][tour[i+1]] for all consecutive pairs in the tour."""
     return sum(matrix[tour[i]][tour[i + 1]] for i in range(len(tour) - 1))
 
 

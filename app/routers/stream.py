@@ -142,11 +142,11 @@ async def trip_stream(
                 }
 
                 # Detect and send urgency alerts
-                result_dicts: list[dict[str, Any]] = [
-                    r.model_dump() for r in response.places
-                ]
                 alerts: list[UrgencyAlert] = _detect_alerts(
-                    result_dicts, last_colors, ctx.place_names, ctx.place_priorities
+                    [r.model_dump() for r in response.places],
+                    last_colors,
+                    ctx.place_names,
+                    ctx.place_priorities,
                 )
                 for alert in alerts:
                     yield {

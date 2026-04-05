@@ -177,6 +177,7 @@ async def compute_feasibility(
             current_time=current_time,
             trip_end_time=trip_end_dt,
             trip_date=trip_date,
+            trip_timezone=trip.get("timezone"),
         )
         results.append(FeasibilityResult(**result))
 

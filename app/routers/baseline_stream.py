@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import aiosqlite
@@ -103,7 +104,7 @@ async def baseline_stream(
 
     if len(ctx.places) < 2:
 
-        async def empty_gen() -> Any:
+        async def empty_gen() -> AsyncGenerator[dict[str, str], None]:
             done = BaselineDone(tour=[], cost=0)
             yield {"event": "done", "data": done.model_dump_json()}
 
