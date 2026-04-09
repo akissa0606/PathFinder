@@ -144,7 +144,8 @@ async def get_route_geometry(
       - ``distance``: leg distance in meters
       - ``duration``: leg duration in seconds
 
-    Falls back to straight-line stub legs when OSRM is unreachable.
+    Returns legs with empty geometry when OSRM is unreachable; callers
+    should check ``geometry`` before using the result.
     """
     if len(coordinates) < 2:
         return []
@@ -152,7 +153,7 @@ async def get_route_geometry(
     coord_str = ";".join(f"{float(lon)},{float(lat)}" for lon, lat in coordinates)
     url = (
         f"{_base_url(profile)}/route/v1/{profile}/{coord_str}"
-        "?geometries=polyline&overview=false&steps=false"
+        "?geometries=polyline&overview=full&steps=false"
     )
 
     shared_client = client_instance()
@@ -170,15 +171,13 @@ async def get_route_geometry(
         if data.get("code") != "Ok":
             raise ValueError(data.get("message", "OSRM error"))
 
+        route = data.get("routes", [{}])[0]
+        route_geometry = route.get("geometry", "")
         legs: list[dict[str, Any]] = []
-        for leg in data.get("routes", [{}])[0].get("legs", []):
-            # Each leg has its own geometry when overview=false and steps are present,
-            # but with steps=false OSRM doesn't include per-leg geometry.
-            # Re-request with overview=full per-leg for simplicity — or use
-            # the full route geometry and split. For now, store leg summary.
+        for leg in route.get("legs", []):
             legs.append(
                 {
-                    "geometry": leg.get("geometry", ""),
+                    "geometry": route_geometry,
                     "distance": leg.get("distance", 0),
                     "duration": leg.get("duration", 0),
                 }
@@ -186,7 +185,7 @@ async def get_route_geometry(
         return legs
 
     except (httpx.HTTPStatusError, httpx.RequestError, ValueError, KeyError):
-        # Fallback: return empty geometries so frontend draws straight lines
+        # Fallback: return empty geometries — callers check for empty geometry
         legs = []
         for i in range(len(coordinates) - 1):
             legs.append({"geometry": "", "distance": 0, "duration": 0})

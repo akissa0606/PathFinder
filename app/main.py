@@ -9,13 +9,13 @@ from fastapi.staticfiles import StaticFiles
 from app.db import init_db
 from app.http_client import close_http_client, init_http_client
 from app.routers import (
-    baseline_stream,
     checkin,
     feasibility,
     next_action,
     places,
     search,
     stream,
+    trajectory,
     trips,
 )
 
@@ -41,7 +41,7 @@ app.include_router(feasibility.router)
 app.include_router(next_action.router)
 app.include_router(checkin.router)
 app.include_router(stream.router)
-app.include_router(baseline_stream.router)
+app.include_router(trajectory.router)
 
 
 @app.get("/health")

@@ -8,7 +8,8 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import get_db
-from app.models import CheckinRequest, CheckinResponse
+from app.models import CheckinRequest, CheckinResponse, TrajectorySegment
+from app.services.osrm import get_route_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ async def checkin(
         )
 
     now: str = datetime.now(timezone.utc).isoformat()
+    trajectory_segment: TrajectorySegment | None = None
 
     if action == "arrived":
         _ = await db.execute(
@@ -69,6 +71,9 @@ async def checkin(
             (now, body.place_id),
         )
         message: str = f"Arrived at {place['name']}"
+
+        # Record trajectory segment from last position to this place
+        trajectory_segment = await _record_trajectory(db, trip_id, place, now)
 
     elif action == "done":
         _ = await db.execute(
@@ -99,4 +104,89 @@ async def checkin(
         arrived_at=updated["arrived_at"],
         departed_at=updated["departed_at"],
         message=message,
+        trajectory_segment=trajectory_segment,
     )
+
+
+async def _record_trajectory(
+    db: aiosqlite.Connection,
+    trip_id: str,
+    place: dict[str, Any],
+    now: str,
+) -> TrajectorySegment | None:
+    """Compute and store trajectory segment from last position to the arrived place."""
+    try:
+        # Get trip info (start coords + transport mode) in one query
+        cursor = await db.execute(
+            "SELECT start_lat, start_lon, transport_mode FROM trips WHERE id = ?",
+            (trip_id,),
+        )
+        trip_row = await cursor.fetchone()
+        if not trip_row:
+            return None
+        transport_mode = trip_row["transport_mode"]
+
+        # Determine last position
+        cursor = await db.execute(
+            "SELECT to_lat, to_lon FROM trajectory_segments "
+            "WHERE trip_id = ? ORDER BY created_at DESC LIMIT 1",
+            (trip_id,),
+        )
+        last_pos = await cursor.fetchone()
+
+        if last_pos:
+            from_lat, from_lon = last_pos["to_lat"], last_pos["to_lon"]
+        else:
+            from_lat, from_lon = trip_row["start_lat"], trip_row["start_lon"]
+
+        to_lat, to_lon = place["lat"], place["lon"]
+
+        # Fetch OSRM route geometry — skip segment if OSRM is unavailable
+        legs = await get_route_geometry(
+            [[from_lon, from_lat], [to_lon, to_lat]], transport_mode
+        )
+        if not legs or not legs[0].get("geometry"):
+            logger.warning(
+                "OSRM unavailable for trip %s — skipping trajectory segment", trip_id
+            )
+            return None
+
+        geometry = legs[0]["geometry"]
+        distance = legs[0]["distance"]
+        duration = legs[0]["duration"]
+
+        # Insert trajectory segment
+        cursor = await db.execute(
+            "INSERT INTO trajectory_segments "
+            "(trip_id, from_lat, from_lon, to_lat, to_lon, place_id, "
+            "geometry, distance_meters, duration_seconds, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                trip_id,
+                from_lat,
+                from_lon,
+                to_lat,
+                to_lon,
+                place["id"],
+                geometry,
+                distance,
+                duration,
+                now,
+            ),
+        )
+
+        return TrajectorySegment(
+            id=cursor.lastrowid or 0,
+            from_lat=from_lat,
+            from_lon=from_lon,
+            to_lat=to_lat,
+            to_lon=to_lon,
+            place_id=place["id"],
+            geometry=geometry,
+            distance_meters=distance,
+            duration_seconds=duration,
+            created_at=now,
+        )
+    except Exception:
+        logger.exception("Failed to record trajectory segment")
+        return None

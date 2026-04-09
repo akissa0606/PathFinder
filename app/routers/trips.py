@@ -29,9 +29,19 @@ async def create_trip(
     body: TripCreate, db: aiosqlite.Connection = Depends(get_db)
 ) -> TripCreatedResponse:
     trip_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    # store timezone from request (fallback to UTC if not provided)
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    # Apply defaults for optional fields
+    start_time = body.start_time or now_dt.strftime("%H:%M")
+    date = body.date or now_dt.strftime("%Y-%m-%d")
     tz = body.timezone or "UTC"
+
+    # Validate end_time > start_time on the same day
+    if body.end_time <= start_time:
+        raise HTTPException(
+            status_code=400,
+            detail=f"End time ({body.end_time}) must be after start time ({start_time})",
+        )
     _ = await db.execute(
         """INSERT INTO trips
            (id, city, start_lat, start_lon, end_lat, end_lon,
@@ -44,9 +54,9 @@ async def create_trip(
             body.start_lon,
             body.end_lat,
             body.end_lon,
-            body.start_time,
+            start_time,
             body.end_time,
-            body.date,
+            date,
             body.transport_mode,
             tz,
             now,
@@ -171,6 +181,9 @@ async def delete_trip(trip_id: str, db: aiosqlite.Connection = Depends(get_db)) 
     if not await cursor.fetchone():
         raise HTTPException(status_code=404, detail="Trip not found")
 
+    _ = await db.execute(
+        "DELETE FROM trajectory_segments WHERE trip_id = ?", (trip_id,)
+    )
     _ = await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
     _ = await db.execute("DELETE FROM places WHERE trip_id = ?", (trip_id,))
     _ = await db.execute("DELETE FROM trips WHERE id = ?", (trip_id,))

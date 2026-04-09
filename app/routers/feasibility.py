@@ -4,6 +4,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import aiosqlite
@@ -99,16 +100,23 @@ async def compute_feasibility(
     cur_lon: float = lon if lon is not None else trip["start_lon"]
 
     trip_date: date = date.fromisoformat(trip["date"])
+    trip_tz_name: str = trip.get("timezone") or "UTC"
+    try:
+        trip_tz: ZoneInfo | timezone = ZoneInfo(trip_tz_name)
+    except (KeyError, Exception):
+        trip_tz = timezone.utc
+
+    # Interpret stored times in the trip's local timezone, then convert to UTC
     end_h, end_m = trip["end_time"].split(":")
     trip_end_dt: datetime = datetime.combine(
-        trip_date, time(int(end_h), int(end_m))
-    ).replace(tzinfo=timezone.utc)
+        trip_date, time(int(end_h), int(end_m)), tzinfo=trip_tz
+    ).astimezone(timezone.utc)
 
     if time_override:
         t_h, t_m = time_override.split(":")
         current_time: datetime = datetime.combine(
-            trip_date, time(int(t_h), int(t_m))
-        ).replace(tzinfo=timezone.utc)
+            trip_date, time(int(t_h), int(t_m)), tzinfo=trip_tz
+        ).astimezone(timezone.utc)
     else:
         current_time = datetime.now(timezone.utc)
 

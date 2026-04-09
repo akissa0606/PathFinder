@@ -13,14 +13,8 @@ import {
   getNextRecommendation,
   checkinPlace,
   connectTripStream,
-  connectBaselineStream,
+  getTrajectory,
 } from "../api.js";
-import {
-  drawNNRoute,
-  draw2optRoute,
-  drawRoadSegment,
-  clearRouteLayers,
-} from "../routeDrawing.js";
 
 // Fix Leaflet default marker icon paths for bundled builds
 delete L.Icon.Default.prototype._getIconUrl;
@@ -120,8 +114,11 @@ const toasts = ref([]); // toast notifications
 const isOffline = ref(!navigator.onLine);
 const feasLoading = ref(true); // loading skeleton state
 
-const routeCalculating = ref(false);
-const routeReady = ref(false);
+// Trajectory state
+const trajectorySegments = ref([]);
+
+// Pending arrival: place the user tapped "Go" on in What Next?
+const pendingArrivalPlace = ref(null); // { id, name, lat, lon }
 
 // Click-to-add state
 const addingByClick = ref(false);
@@ -138,8 +135,7 @@ let eventSource = null;
 let markersLayer = null;
 let searchMarkersLayer = null;
 let userPositionMarker = null;
-let routeLayerGroup = null;
-let baselineES = null;
+let trajectoryLayerGroup = null;
 
 // Computed stats
 const visitedCount = computed(
@@ -195,6 +191,14 @@ const allPlacesDone = computed(() => {
   if (!trip.value || places.value.length === 0) return false;
   return places.value.every(
     (p) => p.status === "done" || p.status === "skipped",
+  );
+});
+
+const isOpenTrip = computed(() => {
+  if (!trip.value) return false;
+  return (
+    Math.abs(trip.value.start_lat - trip.value.end_lat) > 0.0001 ||
+    Math.abs(trip.value.start_lon - trip.value.end_lon) > 0.0001
   );
 });
 
@@ -288,7 +292,7 @@ function initMap() {
   }).addTo(map);
   markersLayer = L.layerGroup().addTo(map);
   searchMarkersLayer = L.layerGroup().addTo(map);
-  routeLayerGroup = L.layerGroup().addTo(map);
+  trajectoryLayerGroup = L.layerGroup().addTo(map);
 
   map.on("click", async (e) => {
     const { lat, lng } = e.latlng;
@@ -406,9 +410,9 @@ async function handleAddPlace(result) {
       category: result.category || null,
       opening_hours: result.opening_hours || null,
     });
-    searchResults.value = searchResults.value.filter((r) => r !== result);
+    searchResults.value = [];
+    searchQuery.value = "";
     updateSearchMarkers();
-    clearRoute();
     await loadTrip();
     await loadFeasibility();
   } catch (e) {
@@ -419,7 +423,6 @@ async function handleAddPlace(result) {
 async function handleDeletePlace(placeId) {
   try {
     await deletePlace(tripId, placeId);
-    clearRoute();
     await loadTrip();
     await loadFeasibility();
   } catch (e) {
@@ -477,21 +480,49 @@ function skipRecommendation() {
   }
 }
 
-function navigateToPlace(rec) {
-  // Find place coords
-  const place = places.value.find((p) => p.id === rec.place_id);
-  if (!place) return;
-  const lat = place.lat;
-  const lon = place.lon;
-  // Open Google Maps directions in new tab
-  const origin =
-    userLat.value != null
-      ? `${userLat.value},${userLon.value}`
-      : `${trip.value.start_lat},${trip.value.start_lon}`;
+const TRANSPORT_MODE_MAP = {
+  foot: "walking",
+  car: "driving",
+  bicycle: "bicycling",
+};
+
+function getLastPosition() {
+  if (trajectorySegments.value.length > 0) {
+    const last = trajectorySegments.value[trajectorySegments.value.length - 1];
+    return { lat: last.to_lat, lon: last.to_lon };
+  }
+  if (userLat.value != null) return { lat: userLat.value, lon: userLon.value };
+  if (trip.value)
+    return { lat: trip.value.start_lat, lon: trip.value.start_lon };
+  return null;
+}
+
+function openGoogleMaps(destLat, destLon) {
+  const origin = getLastPosition();
+  if (!origin) return;
+  const mode = TRANSPORT_MODE_MAP[trip.value?.transport_mode] || "walking";
   window.open(
-    `https://www.google.com/maps/dir/${origin}/${lat},${lon}`,
+    `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lon}&destination=${destLat},${destLon}&travelmode=${mode}`,
     "_blank",
   );
+}
+
+function navigateToPlace(rec) {
+  const place = places.value.find((p) => p.id === rec.place_id);
+  if (!place) return;
+  pendingArrivalPlace.value = {
+    id: place.id,
+    name: place.name,
+    lat: place.lat,
+    lon: place.lon,
+  };
+  openGoogleMaps(place.lat, place.lon);
+  dismissNextCard();
+}
+
+function navigateToFinalDestination() {
+  if (!trip.value) return;
+  openGoogleMaps(trip.value.end_lat, trip.value.end_lon);
 }
 
 let highlightMarker = null;
@@ -520,10 +551,27 @@ function highlightRecommendation() {
 async function handleCheckin(placeId, action) {
   try {
     checkinLoading.value = true;
-    await checkinPlace(tripId, placeId, action);
+    const result = await checkinPlace(tripId, placeId, action);
     showArrivePicker.value = false;
+
+    // Draw trajectory segment on arrival
+    if (action === "arrived" && result.trajectory_segment) {
+      trajectorySegments.value.push(result.trajectory_segment);
+      drawTrajectorySegment(result.trajectory_segment);
+    }
+    if (action === "arrived") {
+      pendingArrivalPlace.value = null;
+    }
+
     await loadTrip();
     await loadFeasibility();
+
+    // Auto-show What Next? after finishing a visit, or dismiss stale recs
+    if (action === "done" && pendingPlaces.value.length > 0) {
+      await askWhatNext();
+    } else if (pendingPlaces.value.length === 0) {
+      dismissNextCard();
+    }
   } catch (e) {
     showToast(`Check-in failed: ${e.message}`);
   } finally {
@@ -657,7 +705,6 @@ async function confirmClickAdd() {
       priority: clickAddPriority.value,
     });
     cancelClickAdd();
-    clearRoute();
     await loadTrip();
     await loadFeasibility();
   } catch (e) {
@@ -665,61 +712,68 @@ async function confirmClickAdd() {
   }
 }
 
-function clearRoute() {
-  if (baselineES) {
-    baselineES.close();
-    baselineES = null;
+// --- Trajectory ---
+
+function decodePolyline(encoded) {
+  const points = [];
+  let index = 0,
+    lat = 0,
+    lng = 0;
+  while (index < encoded.length) {
+    let b,
+      shift = 0,
+      result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push([lat / 1e5, lng / 1e5]);
   }
-  if (routeLayerGroup) clearRouteLayers(routeLayerGroup);
-  routeReady.value = false;
-  routeCalculating.value = false;
+  return points;
 }
 
-function calculateRoute() {
-  if (!trip.value || pendingPlaces.value.length < 2) return;
-  clearRoute();
-  routeCalculating.value = true;
+function drawTrajectorySegment(segment) {
+  if (!map || !trajectoryLayerGroup) return;
+  let latlngs;
+  if (segment.geometry) {
+    latlngs = decodePolyline(segment.geometry);
+  } else {
+    latlngs = [
+      [segment.from_lat, segment.from_lon],
+      [segment.to_lat, segment.to_lon],
+    ];
+  }
+  L.polyline(latlngs, {
+    color: "#6366f1",
+    weight: 3,
+    opacity: 0.5,
+    lineCap: "round",
+    lineJoin: "round",
+  }).addTo(trajectoryLayerGroup);
+}
 
-  const lat = userLat.value ?? trip.value.start_lat;
-  const lon = userLon.value ?? trip.value.start_lon;
-
-  // Track the current NN/2-opt polyline so we can replace it
-  let currentPolyline = null;
-
-  baselineES = connectBaselineStream(tripId, lat, lon, {
-    onNNResult(data) {
-      // Draw initial NN route (gray dashed)
-      if (routeLayerGroup) clearRouteLayers(routeLayerGroup);
-      currentPolyline = drawNNRoute(map, data.coords, routeLayerGroup);
-    },
-    onSwapAccept(data) {
-      // Replace current polyline with improved route (green)
-      if (routeLayerGroup) clearRouteLayers(routeLayerGroup);
-      currentPolyline = draw2optRoute(map, data.coords, true, routeLayerGroup);
-    },
-    onRoadSegment(data) {
-      // Draw OSRM road segment (blue) — accumulate on top of the overview line.
-      // Do NOT remove currentPolyline here; we defer that to onDone so the
-      // overview stays visible while road segments are loading in one by one.
-      drawRoadSegment(map, data.geometry, null, routeLayerGroup);
-    },
-    onDone() {
-      // All road segments drawn — now remove the straight-line overview so only
-      // the actual road geometry (or nothing if OSRM was unreachable) remains.
-      if (currentPolyline && routeLayerGroup) {
-        routeLayerGroup.removeLayer(currentPolyline);
-        currentPolyline = null;
-      }
-      routeCalculating.value = false;
-      routeReady.value = true;
-      baselineES = null;
-    },
-    onError() {
-      routeCalculating.value = false;
-      showToast("Route calculation failed");
-      baselineES = null;
-    },
-  });
+async function loadTrajectory() {
+  if (!tripId) return;
+  try {
+    const data = await getTrajectory(tripId);
+    trajectorySegments.value = data.segments || [];
+    if (trajectoryLayerGroup) trajectoryLayerGroup.clearLayers();
+    for (const seg of trajectorySegments.value) {
+      drawTrajectorySegment(seg);
+    }
+  } catch (e) {
+    console.warn("Failed to load trajectory:", e);
+  }
 }
 
 async function changeTransportMode(newMode) {
@@ -741,6 +795,7 @@ async function changeTransportMode(newMode) {
 onMounted(async () => {
   initMap();
   await loadTrip();
+  await loadTrajectory();
 
   // Request geolocation
   if (navigator.geolocation) {
@@ -770,10 +825,6 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (baselineES) {
-    baselineES.close();
-    baselineES = null;
-  }
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -901,6 +952,7 @@ onUnmounted(() => {
           {{ settingPosition ? "Click map to pin..." : "Pin my location" }}
         </button>
         <button
+          v-if="!allPlacesDone"
           :class="['btn', 'btn-small', addingByClick ? 'btn-active' : '']"
           @click="toggleAddByClick"
           title="Click this, then click anywhere on the map to add a destination at that location"
@@ -920,29 +972,19 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <!-- Calculate Route -->
-      <div
-        v-if="trip && pendingPlaces.length >= 2"
-        class="route-section"
-      >
-        <button
-          class="btn btn-route"
-          @click="calculateRoute"
-          :disabled="routeCalculating"
-        >
-          {{ routeCalculating ? "Calculating..." : routeReady ? "Recalculate Route" : "Calculate Route" }}
-        </button>
-        <button
-          v-if="routeReady"
-          class="btn btn-small"
-          @click="clearRoute"
-        >
-          Clear Route
+      <!-- Head to final destination / back to start -->
+      <div v-if="trip && allPlacesDone" class="final-destination-banner">
+        <p v-if="isOpenTrip">
+          All places visited! Head to your final destination.
+        </p>
+        <p v-else>All places visited! Head back to your starting point.</p>
+        <button class="btn btn-primary" @click="navigateToFinalDestination">
+          {{ isOpenTrip ? "Go to Final Destination" : "Head Back to Start" }}
         </button>
       </div>
 
-      <!-- What Next? -->
-      <div class="next-section">
+      <!-- What Next? — hidden when all places are done -->
+      <div v-if="!allPlacesDone" class="next-section">
         <button
           class="btn btn-next"
           @click="askWhatNext"
@@ -992,7 +1034,7 @@ onUnmounted(() => {
                     navigateToPlace(nextRecs.recommendations[nextSkipIndex])
                   "
                 >
-                  Navigate
+                  Go
                 </button>
                 <button class="btn btn-small" @click="skipRecommendation">
                   Skip
@@ -1022,12 +1064,13 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="search-section">
+      <div v-if="!allPlacesDone" class="search-section">
+        <h3 class="section-title">Add a stop</h3>
         <form class="search-bar" @submit.prevent="doSearch">
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="Search places..."
+            placeholder="Search for a place to add..."
           />
           <button type="submit" class="btn btn-primary" :disabled="searching">
             {{ searching ? "..." : "Search" }}
@@ -1051,10 +1094,37 @@ onUnmounted(() => {
         </ul>
       </div>
 
-      <!-- Check-in actions -->
-      <div v-if="trip" class="checkin-actions">
+      <!-- Check-in actions — hidden when all places are done -->
+      <div v-if="trip && !allPlacesDone" class="checkin-actions">
+        <!-- Pending arrival: user tapped Go on a recommendation -->
+        <div
+          v-if="pendingArrivalPlace && !visitingPlace"
+          class="pending-arrival-card"
+        >
+          <p class="picker-label">Did you arrive at:</p>
+          <strong>{{ pendingArrivalPlace.name }}</strong>
+          <div class="pending-arrival-actions">
+            <button
+              class="btn btn-primary"
+              :disabled="checkinLoading"
+              @click="handleCheckin(pendingArrivalPlace.id, 'arrived')"
+            >
+              Yes, I arrived
+            </button>
+            <button
+              class="btn btn-small"
+              @click="
+                pendingArrivalPlace = null;
+                showArrivePicker = true;
+              "
+            >
+              I went somewhere else
+            </button>
+          </div>
+        </div>
+
         <button
-          v-if="!visitingPlace"
+          v-if="!visitingPlace && !pendingArrivalPlace"
           class="btn btn-checkin btn-arrive"
           :disabled="checkinLoading || !pendingPlaces.length"
           @click="showArrivePicker = !showArrivePicker"
@@ -1225,7 +1295,11 @@ onUnmounted(() => {
   </div>
 
   <!-- Click-to-add modal -->
-  <div v-if="showClickAddModal" class="modal-overlay" @click.self="cancelClickAdd">
+  <div
+    v-if="showClickAddModal"
+    class="modal-overlay"
+    @click.self="cancelClickAdd"
+  >
     <div class="modal">
       <h3 class="modal-title">Add destination</h3>
       <p class="modal-coords">
@@ -1864,29 +1938,33 @@ onUnmounted(() => {
   margin-top: 4px;
 }
 
-.route-section {
+.pending-arrival-card {
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  padding: 12px 14px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
 }
 
-.btn-route {
-  background: #0d6efd;
-  color: #fff;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
-  cursor: pointer;
+.pending-arrival-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.final-destination-banner {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.final-destination-banner p {
+  margin-bottom: 8px;
   font-weight: 500;
-}
-
-.btn-route:hover:not(:disabled) {
-  background: #0b5ed7;
-}
-
-.btn-route:disabled {
-  opacity: 0.6;
-  cursor: wait;
 }
 
 @media (max-width: 768px) {

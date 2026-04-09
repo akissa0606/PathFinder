@@ -37,9 +37,16 @@ const redIcon = new L.Icon({
 
 const router = useRouter();
 
+function roundedNow() {
+  const d = new Date();
+  const mins = Math.ceil(d.getMinutes() / 5) * 5;
+  d.setMinutes(mins, 0, 0);
+  return d.toTimeString().slice(0, 5);
+}
+
 const city = ref("");
-const date = ref("");
-const startTime = ref("09:00");
+const date = ref(new Date().toISOString().slice(0, 10));
+const startTime = ref(roundedNow());
 const endTime = ref("18:00");
 const transport = ref("foot");
 const startLat = ref("");
@@ -57,7 +64,7 @@ const startResults = ref([]);
 const endResults = ref([]);
 const startAddress = ref("");
 const endAddress = ref("");
-const mapMode = ref("start"); // 'start' or 'end'
+const mapMode = ref("none"); // 'none', 'start', or 'end'
 
 let map = null;
 let startMarker = null;
@@ -71,15 +78,24 @@ function initMap() {
   }).addTo(map);
 
   map.on("click", (e) => {
+    if (mapMode.value === "none") return;
     const { lat, lng } = e.latlng;
     if (mapMode.value === "start") {
       setStartPosition(lat, lng);
       startAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    } else {
+    } else if (mapMode.value === "end") {
       setEndPosition(lat, lng);
       endAddress.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     }
+    // Deactivate pick mode after placing
+    mapMode.value = "none";
+    map.getContainer().style.cursor = "";
   });
+}
+
+function pickOnMap(mode) {
+  mapMode.value = mode;
+  if (map) map.getContainer().style.cursor = "crosshair";
 }
 
 function setStartPosition(lat, lon) {
@@ -195,8 +211,8 @@ function useMyLocation() {
 
 async function submit() {
   error.value = "";
-  if (!city.value || !date.value || !startLat.value || !startLon.value) {
-    error.value = "Please fill in all required fields";
+  if (!city.value || !endTime.value || !startLat.value || !startLon.value) {
+    error.value = "Please fill in city, end time, and start location";
     return;
   }
   const eLat = sameAsStart.value ? startLat.value : endLat.value;
@@ -206,19 +222,28 @@ async function submit() {
     return;
   }
 
+  // Validate end_time vs start_time
+  const effectiveStart = startTime.value || roundedNow();
+  if (endTime.value <= effectiveStart) {
+    error.value = `Arrive-by time (${endTime.value}) has already passed — it must be after ${effectiveStart}`;
+    return;
+  }
+
   loading.value = true;
   try {
-    const trip = await createTrip({
+    const payload = {
       city: city.value,
-      date: date.value,
-      start_time: startTime.value,
       end_time: endTime.value,
       transport_mode: transport.value,
       start_lat: parseFloat(startLat.value),
       start_lon: parseFloat(startLon.value),
       end_lat: parseFloat(eLat),
       end_lon: parseFloat(eLon),
-    });
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+    if (date.value) payload.date = date.value;
+    if (startTime.value) payload.start_time = startTime.value;
+    const trip = await createTrip(payload);
     router.push(`/trip/${trip.id}`);
   } catch (e) {
     error.value = `Failed to create trip: ${e.message}`;
@@ -229,6 +254,7 @@ async function submit() {
 
 onMounted(() => {
   initMap();
+  useMyLocation();
 });
 onUnmounted(() => {
   clearTimeout(debounceTimer);
@@ -243,7 +269,7 @@ onUnmounted(() => {
   <div class="home-layout">
     <div class="form-panel">
       <h1>PathFinder</h1>
-      <p class="subtitle">Plan your trip with feasibility-guided exploration</p>
+      <p class="subtitle">Your reactive journey companion</p>
 
       <form class="trip-form" @submit.prevent="submit">
         <div class="form-group">
@@ -257,20 +283,28 @@ onUnmounted(() => {
           />
         </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="date">Date</label>
-            <input id="date" v-model="date" type="date" required />
-          </div>
-          <div class="form-group">
-            <label for="start-time">Start time</label>
-            <input id="start-time" v-model="startTime" type="time" />
-          </div>
-          <div class="form-group">
-            <label for="end-time">End time</label>
-            <input id="end-time" v-model="endTime" type="time" />
-          </div>
+        <!-- End time is the primary required field -->
+        <div class="form-group">
+          <label for="end-time"
+            >Arrive by <span class="required-hint">(required)</span></label
+          >
+          <input id="end-time" v-model="endTime" type="time" required />
         </div>
+
+        <!-- Date and start time are optional — pre-filled with "now" -->
+        <details class="optional-times">
+          <summary>Advanced: change date or departure time</summary>
+          <div class="form-row optional-row">
+            <div class="form-group">
+              <label for="date">Date</label>
+              <input id="date" v-model="date" type="date" />
+            </div>
+            <div class="form-group">
+              <label for="start-time">Depart at</label>
+              <input id="start-time" v-model="startTime" type="time" />
+            </div>
+          </div>
+        </details>
 
         <div class="form-group">
           <label for="transport">Transport mode</label>
@@ -289,6 +323,7 @@ onUnmounted(() => {
               type="text"
               placeholder="Search address or place..."
               autocomplete="off"
+              @input="debounceGeocode(startSearch, startResults)"
             />
             <ul v-if="startResults.length" class="autocomplete-list">
               <li
@@ -300,77 +335,104 @@ onUnmounted(() => {
               </li>
             </ul>
           </div>
-          <p v-if="startAddress" class="selected-address">{{ startAddress }}</p>
-          <p v-if="startLat && startLon" class="coords-display">
-            {{ startLat }}, {{ startLon }}
-          </p>
-          <a class="geo-link" href="#" @click.prevent="useMyLocation"
-            >Use my location</a
-          >
-        </fieldset>
-
-        <fieldset>
-          <legend>End location</legend>
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="sameAsStart" />
-            Same as start
-          </label>
-          <template v-if="!sameAsStart">
-            <div class="form-group">
-              <input
-                v-model="endSearch"
-                type="text"
-                placeholder="Search address or place..."
-                autocomplete="off"
-              />
-              <ul v-if="endResults.length" class="autocomplete-list">
-                <li
-                  v-for="(r, i) in endResults"
-                  :key="i"
-                  @click="selectEndResult(r)"
-                >
-                  {{ r.name }}
-                </li>
-              </ul>
-            </div>
-            <p v-if="endAddress" class="selected-address">{{ endAddress }}</p>
-            <p v-if="endLat && endLon" class="coords-display">
-              {{ endLat }}, {{ endLon }}
+          <div class="location-actions">
+            <button
+              type="button"
+              class="btn btn-small"
+              :class="{ 'btn-active': mapMode === 'start' }"
+              @click="pickOnMap('start')"
+            >
+              {{ mapMode === "start" ? "Click the map..." : "Pick on map" }}
+            </button>
+            <a class="geo-link" href="#" @click.prevent="useMyLocation"
+              >Use my location</a
+            >
+          </div>
+          <div v-if="startAddress" class="location-set">
+            <p class="selected-address">{{ startAddress }}</p>
+            <p v-if="startLat && startLon" class="coords-display">
+              {{ Number(startLat).toFixed(5) }},
+              {{ Number(startLon).toFixed(5) }}
             </p>
-          </template>
+          </div>
         </fieldset>
 
-        <div class="map-mode-toggle">
-          <span>Click map to set:</span>
+        <!-- Trip type toggle -->
+        <div class="trip-type-toggle">
           <button
             type="button"
-            :class="[
-              'btn',
-              'btn-small',
-              mapMode === 'start' ? 'btn-primary' : 'btn-secondary',
-            ]"
-            @click="mapMode = 'start'"
+            :class="['trip-type-btn', sameAsStart ? 'active' : '']"
+            @click="sameAsStart = true"
           >
-            Set start
+            ⟳ Closed trip
+            <span class="trip-type-hint">Return to start</span>
           </button>
           <button
             type="button"
-            :class="[
-              'btn',
-              'btn-small',
-              mapMode === 'end' ? 'btn-primary' : 'btn-secondary',
-            ]"
-            @click="mapMode = 'end'"
+            :class="['trip-type-btn', !sameAsStart ? 'active' : '']"
+            @click="sameAsStart = false"
           >
-            Set end
+            → Open trip
+            <span class="trip-type-hint">Different endpoint</span>
           </button>
         </div>
 
+        <!-- End location — only for open trip -->
+        <fieldset v-if="!sameAsStart">
+          <legend>Final destination</legend>
+          <div class="form-group">
+            <input
+              v-model="endSearch"
+              type="text"
+              placeholder="Search address or place..."
+              autocomplete="off"
+              @input="debounceGeocode(endSearch, endResults)"
+            />
+            <ul v-if="endResults.length" class="autocomplete-list">
+              <li
+                v-for="(r, i) in endResults"
+                :key="i"
+                @click="selectEndResult(r)"
+              >
+                {{ r.name }}
+              </li>
+            </ul>
+          </div>
+          <div class="location-actions">
+            <button
+              type="button"
+              class="btn btn-small"
+              :class="{ 'btn-active': mapMode === 'end' }"
+              @click="pickOnMap('end')"
+            >
+              {{ mapMode === "end" ? "Click the map..." : "Pick on map" }}
+            </button>
+          </div>
+          <div v-if="endAddress" class="location-set">
+            <p class="selected-address">{{ endAddress }}</p>
+            <p v-if="endLat && endLon" class="coords-display">
+              {{ Number(endLat).toFixed(5) }}, {{ Number(endLon).toFixed(5) }}
+            </p>
+          </div>
+          <p v-if="!endLat && !endLon" class="end-hint">
+            Search or pick on map to set your final destination.
+          </p>
+        </fieldset>
+
         <p v-if="error" class="error">{{ error }}</p>
 
-        <button type="submit" class="btn btn-primary" :disabled="loading">
+        <!-- Create Trip: always visible for closed trip; visible for open trip only when end is set -->
+        <button
+          v-if="sameAsStart || (endLat && endLon)"
+          type="submit"
+          class="btn btn-primary"
+          :disabled="loading"
+        >
           {{ loading ? "Creating..." : "Create Trip" }}
         </button>
+        <p v-else class="end-required-hint">
+          Set a final destination to create the trip.
+        </p>
       </form>
     </div>
 
@@ -456,11 +518,83 @@ label {
   color: var(--text);
 }
 
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.required-hint {
+  font-size: 11px;
+  color: var(--text);
+  font-weight: normal;
+}
+
+.optional-times {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0;
+}
+
+.optional-times summary {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
   cursor: pointer;
+  user-select: none;
+}
+
+.optional-row {
+  padding: 0 12px 12px;
+}
+
+.trip-type-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.trip-type-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.trip-type-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.trip-type-hint {
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--text);
+}
+
+.trip-type-btn.active .trip-type-hint {
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.end-hint {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0;
+  font-style: italic;
+}
+
+.end-required-hint {
+  font-size: 13px;
+  color: var(--text);
+  text-align: center;
+  margin: 0;
 }
 
 input,
@@ -533,12 +667,16 @@ select:focus {
   color: var(--accent, #3b82f6);
 }
 
-.map-mode-toggle {
+.location-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text);
+  gap: 12px;
+}
+
+.location-set {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .error {

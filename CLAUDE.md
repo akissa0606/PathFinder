@@ -1,7 +1,7 @@
 # PathFinder Development Guide
 
 ## Project Overview
-Feasibility-guided exploration engine for trip planning with self-hosted OSRM routing, SQLite persistence, and Google Places API integration. Built as a Vue 3 SPA + FastAPI backend with real-time SSE updates.
+Reactive journey companion for city trip planning — Flighty-style. Users add places to visit, "What Next?" suggests the optimal next destination based on closing times, priority, and proximity. Google Maps handles turn-by-turn navigation (opens in new tab). The map accumulates a trajectory of visited places as a journey record. Built as a Vue 3 SPA + FastAPI backend with self-hosted OSRM routing, SQLite persistence, and real-time SSE updates.
 
 ## Quick Start
 
@@ -36,6 +36,7 @@ cd frontend && npm run dev
 - **trips**: User trip records (city, coords, times, transport mode, timezone)
 - **places**: Location data (coordinates, name, category, priority, opening hours, status, timestamps)
 - **distance_cache**: Cached OSRM results (trip_id, from/to place, duration_seconds)
+- **trajectory_segments**: Completed journey legs (from/to coords, OSRM geometry, distance, duration)
 
 ### Code Structure
 ```
@@ -51,14 +52,15 @@ app/
   │   ├── search.py          # POI search + geocode (/api/search, /api/geocode)
   │   ├── feasibility.py     # Feasibility endpoint + compute_feasibility + FeasibilityContext + Haversine fallback
   │   ├── next_action.py     # "What Next?" recommendations (/api/trips/{id}/next)
-  │   ├── checkin.py         # Check-in state machine (/api/trips/{id}/checkin)
+  │   ├── checkin.py         # Check-in state machine + trajectory recording (/api/trips/{id}/checkin)
+  │   ├── trajectory.py     # Journey trajectory retrieval (/api/trips/{id}/trajectory)
   │   └── stream.py          # SSE real-time updates (/api/trips/{id}/stream)
   ├── engine/
   │   ├── feasibility.py     # Core feasibility algorithm + opening hours parser
   │   ├── scoring.py         # Opportunity-cost "What Next?" scoring
   │   └── category_defaults.py # Default visit durations per category (20 categories)
   └── services/
-      ├── osrm.py            # OSRM HTTP client (foot/car/bicycle distance matrix)
+      ├── osrm.py            # OSRM HTTP client (distance matrix + route geometry)
       ├── overpass.py         # Opening hours via Overpass API (OSM) with caching + retries
       ├── hours.py            # Hours resolver (Overpass → Google Places fallback)
       └── google_places.py   # Google Places opening hours fallback (optional)
@@ -67,11 +69,11 @@ frontend/
   │   ├── main.js            # Vue 3 app entry point
   │   ├── App.vue            # Root component (router-view)
   │   ├── router.js          # Vue Router: / and /trip/:id
-  │   ├── api.js             # All API calls + SSE connection helper
+  │   ├── api.js             # All API calls + SSE connection + trajectory fetch
   │   ├── style.css          # Global styles (dark/light theme, buttons)
   │   └── views/
   │       ├── Home.vue       # Landing page: trip creation form + map
-  │       └── Dashboard.vue  # Trip dashboard: map, feasibility, search, check-in, recommendations
+  │       └── Dashboard.vue  # Trip dashboard: map, feasibility, trajectory, check-in, What Next?, Google Maps navigation
   ├── public/
   │   └── favicon.svg        # App favicon
   ├── index.html             # HTML entry point
@@ -84,7 +86,8 @@ tests/
   ├── test_slice3.py         # "What Next?" scoring + /next endpoint tests (Slice 3)
   ├── test_slice4.py         # SSE urgency alerts + stream tests (Slice 4/5)
   ├── test_slice6.py         # Transport mode switching tests (Slice 6)
-  └── test_slice7.py         # Edge cases: OSRM fallback, empty states, error responses (Slice 7)
+  ├── test_slice7.py         # Edge cases: OSRM fallback, empty states, error responses (Slice 7)
+  └── test_trajectory.py    # Trajectory persistence, check-in recording, cascade delete
 ```
 
 ## API Endpoints
@@ -110,9 +113,11 @@ GET    /api/search?q=...&lat=...&lon=...       → Search OSM via Overpass, Nomi
 GET    /api/geocode?q=...                      → Geocode address via Nominatim
 ```
 
-### Check-In
+### Check-In & Trajectory
 ```
 POST   /api/trips/{id}/checkin                 → { place_id, action: "arrived"|"done"|"skipped" }
+                                                  "arrived" records trajectory segment automatically
+GET    /api/trips/{id}/trajectory              → All journey segments (geometry, distance, duration)
 ```
 
 ### Feasibility & Recommendations
@@ -216,6 +221,23 @@ from dotenv import load_dotenv
 - **OSRM fallback**: When OSRM is unreachable, falls back to Haversine straight-line estimates with detour factor
 - **Opening hours**: Overpass API (primary) → Google Places (fallback) → unknown
 
+### Journey Flow (Flighty-style)
+1. User creates trip (city, end time, start location, transport mode, closed/open path)
+2. Adds places with priority and expected duration — map shows feasibility-colored pins
+3. Taps "What Next?" — algorithm suggests best next destination
+4. Taps "Go" — Google Maps opens in new tab with directions
+5. User navigates to destination, returns to app, taps "Arrived"
+6. Trajectory segment is drawn on the map (retrospective, like Flighty flight arcs)
+7. Auto-suggests next destination after tapping "Done" at current place
+8. Repeat until all places visited — then "Head to final destination"
+
+### Trajectory System
+- Segments stored in `trajectory_segments` table (survives page refresh/tab kill)
+- On "arrived" check-in: OSRM route geometry fetched from last position → arrived place
+- Last position = most recent trajectory segment's destination, or trip start if first visit
+- Frontend draws segments as semi-transparent polylines (purple #6366f1)
+- Google Maps navigation URL: `maps/dir/?api=1&origin=...&destination=...&travelmode=...`
+
 ### SSE Stream
 - Pushes `feasibility_update` and `urgency_alert` events every 60 seconds
 - Alerts trigger on color degradation (green→yellow, yellow→red, any→gray)
@@ -225,6 +247,7 @@ from dotenv import load_dotenv
 - `pending` → `arrived` (visiting) or `skipped`
 - `visiting` → `done` or `skipped`
 - Invalid transitions return 400
+- "arrived" action automatically records trajectory segment
 
 ### Transport Mode Switching
 - PATCH trip with new mode → invalidates distance_cache → background recompute via OSRM

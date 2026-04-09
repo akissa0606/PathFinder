@@ -18,16 +18,16 @@ class TripCreate(BaseModel):
     start_lon: float = Field(ge=-180, le=180)
     end_lat: float = Field(ge=-90, le=90)
     end_lon: float = Field(ge=-180, le=180)
-    start_time: str  # "09:00"
+    start_time: str | None = None  # "09:00" — defaults to current time
     end_time: str  # "18:00"
-    date: str  # "2026-04-15"
+    date: str | None = None  # "2026-04-15" — defaults to today
     transport_mode: Literal["foot", "car", "bicycle"] = "foot"
     timezone: str | None = "UTC"
 
     @field_validator("start_time", "end_time")
     @classmethod
-    def validate_time_format(cls, v: str) -> str:
-        if not _TIME_RE.match(v):
+    def validate_time_format(cls, v: str | None) -> str | None:
+        if v is not None and not _TIME_RE.match(v):
             raise ValueError("time must be in HH:MM format (00:00–23:59)")
         return v
 
@@ -153,6 +153,7 @@ class CheckinResponse(BaseModel):
     arrived_at: str | None
     departed_at: str | None
     message: str
+    trajectory_segment: "TrajectorySegment | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -175,31 +176,22 @@ class NextResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Baseline route
+# Trajectory
 # ---------------------------------------------------------------------------
 
 
-class BaselineNNResult(BaseModel):
-    tour: list[int]
-    cost: float
-    coords: list[list[float]]
+class TrajectorySegment(BaseModel):
+    id: int
+    from_lat: float
+    from_lon: float
+    to_lat: float
+    to_lon: float
+    place_id: int | None
+    geometry: str
+    distance_meters: float
+    duration_seconds: float
+    created_at: str
 
 
-class BaselineSwapEvent(BaseModel):
-    i: int
-    j: int
-    tour: list[int]
-    cost: float
-    accepted: bool
-    coords: list[list[float]]
-
-
-class BaselineRoadSegment(BaseModel):
-    from_idx: int
-    to_idx: int
-    geometry: str  # encoded polyline (or empty for straight-line fallback)
-
-
-class BaselineDone(BaseModel):
-    tour: list[int]
-    cost: float
+class TrajectoryResponse(BaseModel):
+    segments: list[TrajectorySegment]

@@ -91,6 +91,23 @@ async def _ensure_timezone_column(db: aiosqlite.Connection) -> None:
         )
 
 
+CREATE_TRAJECTORY_SEGMENTS = """
+CREATE TABLE IF NOT EXISTS trajectory_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id TEXT NOT NULL REFERENCES trips(id),
+    from_lat REAL NOT NULL,
+    from_lon REAL NOT NULL,
+    to_lat REAL NOT NULL,
+    to_lon REAL NOT NULL,
+    place_id INTEGER,
+    geometry TEXT NOT NULL DEFAULT '',
+    distance_meters REAL NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+"""
+
+
 async def init_db() -> None:
     """Create all tables if they don't exist. Safe to call on every startup.
 
@@ -111,6 +128,7 @@ async def init_db() -> None:
 
         await db.execute(CREATE_PLACES)
         await db.execute(CREATE_DISTANCE_CACHE)
+        await db.execute(CREATE_TRAJECTORY_SEGMENTS)
 
         # Indexes for performance
         await db.execute(
@@ -118,6 +136,9 @@ async def init_db() -> None:
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_distance_cache_trip_id ON distance_cache(trip_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trajectory_trip_id ON trajectory_segments(trip_id)"
         )
 
         await db.commit()
