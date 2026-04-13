@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import L from "leaflet";
 import {
   getTrip,
@@ -90,6 +90,7 @@ const feasIconMap = {
 };
 
 const route = useRoute();
+const router = useRouter();
 const tripId = route.params.id;
 
 const trip = ref(null);
@@ -891,6 +892,9 @@ onUnmounted(() => {
             ({{ tripSummary.skipped }} skipped)
           </span>
         </p>
+        <button class="btn btn-primary" @click="router.push('/')">
+          Back to Home
+        </button>
       </div>
 
       <!-- All Places Done summary -->
@@ -903,6 +907,9 @@ onUnmounted(() => {
             ({{ tripSummary.skipped }} skipped)
           </span>
         </p>
+        <button class="btn btn-secondary" @click="router.push('/')">
+          Back to Home
+        </button>
       </div>
 
       <div v-if="trip" class="trip-header">
@@ -984,6 +991,9 @@ onUnmounted(() => {
         <p v-else>All places visited! Head back to your starting point.</p>
         <button class="btn btn-primary" @click="navigateToFinalDestination">
           {{ isOpenTrip ? "Go to Final Destination" : "Head Back to Start" }}
+        </button>
+        <button class="btn btn-secondary" @click="router.push('/')">
+          Back to Home
         </button>
       </div>
 

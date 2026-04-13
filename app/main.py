@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.db import init_db
@@ -51,4 +52,9 @@ async def health():
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.exists(FRONTEND_DIST):
+    # Catch-all for Vue Router paths (e.g. /trip/:id) — serve index.html
+    @app.get("/trip/{path:path}")
+    async def spa_trip(path: str):
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="static")

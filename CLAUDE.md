@@ -7,11 +7,19 @@ Reactive journey companion for city trip planning — Flighty-style. Users add p
 
 ```bash
 # Terminal 1: Start OSRM and initialize database
+# Prefer the modern Docker CLI: `docker compose up -d`.
+# If your environment uses the legacy Docker Compose binary, use:
+# `docker-compose up -d`
 docker compose up -d
 python3 migrate.py
 
 # Terminal 2: Start backend
+# On macOS / Linux:
 source venv/bin/activate
+# On Windows (Command Prompt):
+venv\Scripts\activate
+# On Windows (PowerShell), if execution policy allows:
+# .\venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload
 
 # Terminal 3: Start frontend dev server (optional — for hot reload)

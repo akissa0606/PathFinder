@@ -187,6 +187,6 @@ async def get_route_geometry(
     except (httpx.HTTPStatusError, httpx.RequestError, ValueError, KeyError):
         # Fallback: return empty geometries — callers check for empty geometry
         legs = []
-        for i in range(len(coordinates) - 1):
+        for _ in range(len(coordinates) - 1):
             legs.append({"geometry": "", "distance": 0, "duration": 0})
         return legs

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
-import { createTrip, geocode } from "../api.js";
+import { createTrip, getTrip, geocode } from "../api.js";
 import L from "leaflet";
 
 // Fix Leaflet default marker icon paths
@@ -209,6 +209,60 @@ function useMyLocation() {
   );
 }
 
+// --- Trip History (localStorage) ---
+const STORAGE_KEY = "pathfinder_trips";
+const pastTrips = ref([]);
+
+function getSavedTripIds() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveTripId(id) {
+  const ids = getSavedTripIds();
+  if (!ids.includes(id)) {
+    ids.unshift(id); // newest first
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+  }
+}
+
+function removeTripId(id) {
+  const ids = getSavedTripIds().filter((x) => x !== id);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+  pastTrips.value = pastTrips.value.filter((t) => t.id !== id);
+}
+
+async function loadPastTrips() {
+  const ids = getSavedTripIds();
+  const results = [];
+  for (const id of ids) {
+    try {
+      const data = await getTrip(id);
+      const visited = (data.places || []).filter(
+        (p) => p.status === "done",
+      ).length;
+      const total = (data.places || []).length;
+      results.push({
+        id: data.id,
+        city: data.city,
+        date: data.date,
+        start_time: data.start_time,
+        end_time: data.end_time,
+        transport_mode: data.transport_mode,
+        visited,
+        total,
+      });
+    } catch {
+      // Trip may have been deleted — remove stale ID
+      removeTripId(id);
+    }
+  }
+  pastTrips.value = results;
+}
+
 async function submit() {
   error.value = "";
   if (!city.value || !endTime.value || !startLat.value || !startLon.value) {
@@ -244,6 +298,7 @@ async function submit() {
     if (date.value) payload.date = date.value;
     if (startTime.value) payload.start_time = startTime.value;
     const trip = await createTrip(payload);
+    saveTripId(trip.id);
     router.push(`/trip/${trip.id}`);
   } catch (e) {
     error.value = `Failed to create trip: ${e.message}`;
@@ -255,6 +310,7 @@ async function submit() {
 onMounted(() => {
   initMap();
   useMyLocation();
+  loadPastTrips();
 });
 onUnmounted(() => {
   clearTimeout(debounceTimer);
@@ -434,6 +490,38 @@ onUnmounted(() => {
           Set a final destination to create the trip.
         </p>
       </form>
+
+      <!-- Trip History -->
+      <div v-if="pastTrips.length" class="trip-history">
+        <h2 class="history-title">Your Trips</h2>
+        <div class="trip-cards">
+          <div
+            v-for="t in pastTrips"
+            :key="t.id"
+            class="trip-card"
+            @click="router.push(`/trip/${t.id}`)"
+          >
+            <div class="trip-card-header">
+              <strong>{{ t.city }}</strong>
+              <span class="trip-card-date">{{ t.date }}</span>
+            </div>
+            <div class="trip-card-details">
+              <span>{{ t.start_time }}–{{ t.end_time }}</span>
+              <span class="trip-card-mode">{{ t.transport_mode }}</span>
+            </div>
+            <div class="trip-card-stats">
+              {{ t.visited }}/{{ t.total }} places visited
+            </div>
+            <button
+              class="trip-card-remove"
+              title="Remove from history"
+              @click.stop="removeTripId(t.id)"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="map-panel">
@@ -682,6 +770,91 @@ select:focus {
 .error {
   color: #ef4444;
   font-size: 14px;
+}
+
+.trip-history {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.history-title {
+  font-size: 18px;
+  margin: 0 0 12px;
+  color: var(--text-h);
+}
+
+.trip-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trip-card {
+  display: block;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s;
+}
+
+.trip-card:hover {
+  border-color: var(--accent, #3b82f6);
+}
+
+.trip-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.trip-card-header strong {
+  font-size: 15px;
+  color: var(--text-h);
+}
+
+.trip-card-date {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.trip-card-details {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.trip-card-mode {
+  text-transform: capitalize;
+  margin-left: 6px;
+  opacity: 0.7;
+}
+
+.trip-card-stats {
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.trip-card-remove {
+  float: right;
+  background: none;
+  border: none;
+  color: var(--text);
+  opacity: 0.4;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+}
+
+.trip-card-remove:hover {
+  opacity: 1;
+  color: #ef4444;
 }
 
 @media (max-width: 768px) {
