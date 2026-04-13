@@ -258,7 +258,6 @@ Invalid transitions return HTTP 400. "arrived" triggers trajectory recording if 
   - Format files: `npm run format`
   - Lint and fix: `npm run lint:fix`
   - Review remaining lint warnings: `npm run lint`
-- Recommendation: add a pre-commit hook (e.g., `husky` + `lint-staged`) to run `prettier --write` and `eslint --fix` on staged files so linting/formatting are enforced before commits. This reduces noisy diffs and ensures consistent style across the team.
 
 ---
 

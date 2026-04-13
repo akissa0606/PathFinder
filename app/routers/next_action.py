@@ -69,6 +69,7 @@ async def get_next_recommendation(
         trip_end_time=ctx.trip_end_dt,
         trip_date=ctx.trip_date,
         endpoint_idx=ctx.endpoint_idx,
+        trip_timezone=ctx.trip_timezone,
         precomputed_feasibility=precomputed_feasibility,
     )
 

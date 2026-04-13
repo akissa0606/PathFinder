@@ -4,8 +4,8 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,7 +25,8 @@ class FeasibilityContext:
     """Intermediate data produced during feasibility computation.
 
     Exposed so callers (e.g. /next endpoint) can reuse the trip lookup,
-    parsed times, place list, and OSRM matrix without re-fetching.
+    parsed times, place list, OSRM matrix, and the trip timezone without
+    re-fetching.
     """
 
     places: list[dict[str, Any]]
@@ -33,6 +34,7 @@ class FeasibilityContext:
     current_time: datetime
     trip_end_dt: datetime
     trip_date: date
+    trip_timezone: str | None = None
     endpoint_idx: int
     place_names: dict[int, str] = field(default_factory=dict)
     place_priorities: dict[int, str] = field(default_factory=dict)
@@ -141,6 +143,7 @@ async def compute_feasibility(
             current_time=current_time,
             trip_end_dt=trip_end_dt,
             trip_date=trip_date,
+            trip_timezone=trip.get("timezone"),
             endpoint_idx=0,
             place_names=place_names,
             place_priorities=place_priorities,
@@ -195,6 +198,7 @@ async def compute_feasibility(
         current_time=current_time,
         trip_end_dt=trip_end_dt,
         trip_date=trip_date,
+        trip_timezone=trip.get("timezone"),
         endpoint_idx=endpoint_idx,
         place_names=place_names,
         place_priorities=place_priorities,

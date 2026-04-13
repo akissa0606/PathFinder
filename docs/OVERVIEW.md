@@ -53,7 +53,6 @@ This project uses a small set of formatters and linters for developer ergonomics
     - `npm run lint:fix` — ESLint with `--fix` (auto-fix where possible)
 
 Recommendations:
-- Add a pre-commit hook (e.g. `husky` + `lint-staged`) or use `pre-commit` to run formatters and linters on staged files.
 - CI should run `ruff check`, a Python type checker (Pyright or mypy), `npm run lint`, and the test suite.
 
 ---

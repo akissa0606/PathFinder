@@ -28,6 +28,7 @@ def score_next_actions(
     trip_end_time: datetime,
     trip_date: date,
     endpoint_idx: int,
+    trip_timezone: str | None = None,
     precomputed_feasibility: dict[int, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -43,6 +44,9 @@ def score_next_actions(
         trip_end_time: trip end datetime
         trip_date: date of the trip
         endpoint_idx: index of endpoint in matrix
+        trip_timezone: optional IANA timezone string for the trip (e.g. "Europe/Budapest").
+                       When provided, any internal feasibility recomputation will interpret
+                       opening-hours using this timezone.
         precomputed_feasibility: optional mapping from place_id to feasibility result
 
     Returns:
@@ -72,6 +76,7 @@ def score_next_actions(
             current_time=current_time,
             trip_end_time=trip_end_time,
             trip_date=trip_date,
+            trip_timezone=trip_timezone,
         )
         feasibility[pid] = feas
 
