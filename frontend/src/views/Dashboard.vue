@@ -456,10 +456,9 @@ async function handlePriorityChange(place, newPriority) {
 
 async function handleDurationChange(place, newDuration) {
   try {
-    await updatePlace(tripId, place.id, {
-      estimated_duration_min: parseInt(newDuration) || 30,
-    });
-    place.estimated_duration_min = parseInt(newDuration) || 30;
+    const dur = parseInt(newDuration) || defaultDuration(place);
+    await updatePlace(tripId, place.id, { estimated_duration_min: dur });
+    place.estimated_duration_min = dur;
   } catch (e) {
     showToast(`Failed to update duration: ${e.message}`);
   }
@@ -625,6 +624,36 @@ function placeName(name) {
   if (!name) return name;
   const comma = name.indexOf(",");
   return comma === -1 ? name : name.slice(0, comma).trim();
+}
+
+const CATEGORY_DURATION = {
+  museum: 90,
+  gallery: 60,
+  temple: 45,
+  church: 30,
+  castle: 90,
+  monument: 15,
+  landmark: 10,
+  park: 60,
+  garden: 45,
+  cafe: 30,
+  restaurant: 75,
+  bar: 60,
+  shop: 40,
+  market: 60,
+  theater: 120,
+  zoo: 180,
+  beach: 120,
+  viewpoint: 15,
+  other: 45,
+};
+
+function defaultDuration(place) {
+  return (
+    place.estimated_duration_min ||
+    CATEGORY_DURATION[place.category] ||
+    CATEGORY_DURATION.other
+  );
 }
 
 function dismissNextCard() {
@@ -1327,7 +1356,7 @@ onUnmounted(() => {
               </select>
               <input
                 type="number"
-                :value="p.estimated_duration_min || 30"
+                :value="defaultDuration(p)"
                 min="5"
                 step="5"
                 class="duration-input"
@@ -1706,19 +1735,26 @@ onUnmounted(() => {
   position: relative;
   border: 2px solid #f59e0b;
   border-radius: 8px;
-  padding: 14px;
+  padding: 14px 38px 14px 14px;
   background: var(--bg);
 }
 
 .next-dismiss {
   position: absolute;
-  top: 6px;
+  top: 8px;
   right: 10px;
   background: none;
   border: none;
-  font-size: 18px;
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
   color: var(--text);
+  opacity: 0.6;
+  padding: 2px 4px;
+}
+
+.next-dismiss:hover {
+  opacity: 1;
 }
 
 .next-primary {
