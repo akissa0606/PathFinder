@@ -984,9 +984,6 @@ onUnmounted(() => {
             ({{ tripSummary.skipped }} skipped)
           </span>
         </p>
-        <button class="btn btn-secondary" @click="router.push('/')">
-          Back to Home
-        </button>
       </div>
 
       <div v-if="trip" class="trip-header">
@@ -1076,9 +1073,6 @@ onUnmounted(() => {
         <p v-else>All places visited! Head back to your starting point.</p>
         <button class="btn btn-primary" @click="navigateToFinalDestination">
           {{ isOpenTrip ? "Go to Final Destination" : "Head Back to Start" }}
-        </button>
-        <button class="btn btn-secondary" @click="router.push('/')">
-          Back to Home
         </button>
       </div>
 

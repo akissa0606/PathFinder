@@ -146,6 +146,7 @@ function initMap(tripData, segs) {
     segmentPolylines.push(polyline);
   }
 
+
   // Start marker
   L.marker([tripData.start_lat, tripData.start_lon], { icon: greenIcon })
     .bindPopup("Start")
@@ -205,7 +206,6 @@ async function replayJourney() {
       await new Promise((resolve) =>
         animateDotAlongPolyline(polyline, dur, "#6366f1", resolve)
       );
-      // 300ms pause between segments
       if (i < segmentPolylines.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 300));
       }

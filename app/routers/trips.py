@@ -18,6 +18,7 @@ from app.models import (
     TripResponse,
     TripUpdate,
 )
+from app.services.osrm import get_route_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +207,59 @@ async def archive_trip(
         "UPDATE trips SET status = 'archived', completed_at = ?, updated_at = ? WHERE id = ?",
         (now, now, trip_id),
     )
+
+    # Record final trajectory leg from last position to the trip's end point
+    await _record_closing_segment(db, trip_id, dict(row), now)
+
     await db.commit()
     cursor = await db.execute("SELECT * FROM trips WHERE id = ?", (trip_id,))
     updated = await cursor.fetchone()
     if updated is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     return TripResponse(**dict(updated))
+
+
+async def _record_closing_segment(
+    db: aiosqlite.Connection,
+    trip_id: str,
+    trip: dict[str, Any],
+    now: str,
+) -> None:
+    """Record a trajectory segment from the last position to the trip's end point, if needed."""
+    try:
+        end_lat: float = trip["end_lat"]
+        end_lon: float = trip["end_lon"]
+
+        cursor = await db.execute(
+            "SELECT to_lat, to_lon FROM trajectory_segments "
+            "WHERE trip_id = ? ORDER BY created_at DESC LIMIT 1",
+            (trip_id,),
+        )
+        last_pos = await cursor.fetchone()
+        if last_pos:
+            from_lat, from_lon = last_pos["to_lat"], last_pos["to_lon"]
+        else:
+            from_lat, from_lon = trip["start_lat"], trip["start_lon"]
+
+        # Skip if already at end point (within ~10 m)
+        if abs(from_lat - end_lat) < 0.0001 and abs(from_lon - end_lon) < 0.0001:
+            return
+
+        legs = await get_route_geometry(
+            [[from_lon, from_lat], [end_lon, end_lat]], trip["transport_mode"]
+        )
+        if not legs or not legs[0].get("geometry"):
+            logger.warning("OSRM unavailable — skipping closing segment for trip %s", trip_id)
+            return
+
+        leg = legs[0]
+        await db.execute(
+            "INSERT INTO trajectory_segments "
+            "(trip_id, from_lat, from_lon, to_lat, to_lon, place_id, "
+            "geometry, distance_meters, duration_seconds, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (trip_id, from_lat, from_lon, end_lat, end_lon, None,
+             leg["geometry"], leg["distance"], leg["duration"], now),
+        )
+    except Exception:
+        logger.exception("Failed to record closing segment for trip %s", trip_id)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 import httpx
 
@@ -120,6 +121,7 @@ def client_instance() -> httpx.AsyncClient | None:
     return _client
 
 
+@asynccontextmanager
 async def get_or_create_http_client(
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> AsyncGenerator[httpx.AsyncClient, None]:
