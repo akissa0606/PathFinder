@@ -22,13 +22,11 @@ async def _resolve_hours_background(
     place_id: int, lat: float, lon: float, name: str, db_path: str
 ) -> None:
     """Background task to resolve opening hours and update the place."""
-    import aiosqlite as _aiosqlite
-
     try:
         hours, source = await resolve_opening_hours(lat, lon, name)
         if hours:
-            async with _aiosqlite.connect(db_path) as db:
-                _ = await db.execute(
+            async with aiosqlite.connect(db_path) as db:
+                await db.execute(
                     "UPDATE places SET opening_hours = ?, opening_hours_source = ? WHERE id = ?",
                     (hours, source, place_id),
                 )
@@ -39,14 +37,12 @@ async def _resolve_hours_background(
 
 
 async def _cache_distances_background(
-    trip_id: str, place_id: int, lat: float, lon: float, db_path: str
+    trip_id: str, place_id: int, db_path: str
 ) -> None:
     """Background task to compute OSRM distances between new place and existing places/trip endpoints."""
-    import aiosqlite as _aiosqlite
-
     try:
-        async with _aiosqlite.connect(db_path) as db:
-            db.row_factory = _aiosqlite.Row
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
             # Get trip for start/end coords and transport mode
             cursor = await db.execute("SELECT * FROM trips WHERE id = ?", (trip_id,))
             trip_row = await cursor.fetchone()
@@ -85,14 +81,14 @@ async def _cache_distances_background(
                 if i == new_idx:
                     continue
                 # new -> other
-                _ = await db.execute(
+                await db.execute(
                     """INSERT OR REPLACE INTO distance_cache
                        (trip_id, from_place_id, to_place_id, duration_seconds)
                        VALUES (?, ?, ?, ?)""",
                     (trip_id, place_id, p["id"], matrix[new_idx][i]),
                 )
                 # other -> new
-                _ = await db.execute(
+                await db.execute(
                     """INSERT OR REPLACE INTO distance_cache
                        (trip_id, from_place_id, to_place_id, duration_seconds)
                        VALUES (?, ?, ?, ?)""",
@@ -162,8 +158,6 @@ async def add_place(
         _cache_distances_background,
         trip_id,
         pid,
-        body.lat,
-        body.lon,
         settings.database_path,
     )
 
@@ -182,11 +176,11 @@ async def delete_place(
     if not await cursor.fetchone():
         raise HTTPException(status_code=404, detail="Place not found")
 
-    _ = await db.execute(
+    await db.execute(
         "DELETE FROM distance_cache WHERE trip_id = ? AND (from_place_id = ? OR to_place_id = ?)",
         (trip_id, place_id, place_id),
     )
-    _ = await db.execute("DELETE FROM places WHERE id = ?", (place_id,))
+    await db.execute("DELETE FROM places WHERE id = ?", (place_id,))
     await db.commit()
 
 

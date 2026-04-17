@@ -16,7 +16,7 @@ PRIORITY_WEIGHTS: dict[str, float] = {"must": 1.0, "want": 0.5, "if_time": 0.2}
 __all__ = ["score_next_actions"]
 
 
-def _is_feasible(place: dict[str, Any], feas: dict[str, Any]) -> bool:
+def _is_feasible(feas: dict[str, Any]) -> bool:
     """A place is feasible if its color is not gray."""
     return feas.get("color") != "gray"
 
@@ -84,7 +84,7 @@ def score_next_actions(
     feasible: list[tuple[int, dict[str, Any]]] = [
         (i, p)
         for i, p in enumerate(places)
-        if _is_feasible(p, feasibility.get(p["id"], {}))
+        if _is_feasible(feasibility.get(p["id"], {}))
     ]
 
     if not feasible:
@@ -130,7 +130,7 @@ def score_next_actions(
                 trip_date=trip_date,
                 trip_timezone=trip_timezone,
             )
-            if not _is_feasible(place, simulated_feas):
+            if not _is_feasible(simulated_feas):
                 cost += 1
 
         # Normalize scores to 0-1

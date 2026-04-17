@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import L from "leaflet";
+import { animateDotAlongPolyline, decodePolyline } from "../map-utils.js";
 import { getTrip, getTrajectory } from "../api.js";
 
 // Fix Leaflet default marker icon paths for bundled builds
@@ -54,8 +55,10 @@ const trip = ref(null);
 const segments = ref([]);
 const loading = ref(true);
 const error = ref("");
+const replaying = ref(false);
 
 let map = null;
+let segmentPolylines = [];
 
 // Stats
 const visitedPlaces = computed(() =>
@@ -110,35 +113,6 @@ function shortName(name) {
   return name.split(",")[0].trim();
 }
 
-// Polyline decoder (same as Dashboard)
-function decodePolyline(encoded) {
-  const points = [];
-  let index = 0,
-    lat = 0,
-    lng = 0;
-  while (index < encoded.length) {
-    let b,
-      shift = 0,
-      result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lng += result & 1 ? ~(result >> 1) : result >> 1;
-    points.push([lat / 1e5, lng / 1e5]);
-  }
-  return points;
-}
-
 function initMap(tripData, segs) {
   if (map) return;
   map = L.map("summary-map").setView(
@@ -151,6 +125,7 @@ function initMap(tripData, segs) {
   }).addTo(map);
 
   // Draw trajectory
+  segmentPolylines = [];
   for (const seg of segs) {
     let latlngs;
     if (seg.geometry) {
@@ -161,13 +136,14 @@ function initMap(tripData, segs) {
         [seg.to_lat, seg.to_lon],
       ];
     }
-    L.polyline(latlngs, {
+    const polyline = L.polyline(latlngs, {
       color: "#6366f1",
       weight: 3,
       opacity: 0.6,
       lineCap: "round",
       lineJoin: "round",
     }).addTo(map);
+    segmentPolylines.push(polyline);
   }
 
   // Start marker
@@ -205,6 +181,43 @@ function initMap(tripData, segs) {
   ];
   if (allPoints.length > 1) {
     map.fitBounds(L.latLngBounds(allPoints), { padding: [30, 30] });
+  }
+}
+
+async function replayJourney() {
+  if (!map || segmentPolylines.length === 0) return;
+  replaying.value = true;
+  map.dragging.disable();
+  map.scrollWheelZoom.disable();
+  map.boxZoom.disable();
+  map.keyboard.disable();
+  map.doubleClickZoom.disable();
+  map.touchZoom.disable();
+
+  try {
+    for (let i = 0; i < segmentPolylines.length; i++) {
+      const polyline = segmentPolylines[i];
+      const seg = segments.value[i];
+      const dur = Math.min(
+        3000,
+        Math.max(800, (seg.duration_seconds / 60) * 1000)
+      );
+      await new Promise((resolve) =>
+        animateDotAlongPolyline(polyline, dur, "#6366f1", resolve)
+      );
+      // 300ms pause between segments
+      if (i < segmentPolylines.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+  } finally {
+    map.dragging.enable();
+    map.scrollWheelZoom.enable();
+    map.boxZoom.enable();
+    map.keyboard.enable();
+    map.doubleClickZoom.enable();
+    map.touchZoom.enable();
+    replaying.value = false;
   }
 }
 
@@ -266,6 +279,17 @@ onMounted(async () => {
           <span class="stat-value">{{ formatMinutes(totalTravelMinutes) }}</span>
           <span class="stat-label">in transit</span>
         </div>
+      </div>
+
+      <!-- Replay button -->
+      <div v-if="segments.length > 0" class="replay-section">
+        <button
+          class="replay-button"
+          :disabled="replaying"
+          @click="replayJourney"
+        >
+          {{ replaying ? "Replaying…" : "Replay Journey" }}
+        </button>
       </div>
 
       <!-- Map -->
@@ -401,6 +425,33 @@ onMounted(async () => {
   color: var(--color-text-muted, #888);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* Replay */
+.replay-section {
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.replay-button {
+  padding: 0.75rem 2rem;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.replay-button:hover:not(:disabled) {
+  background: #4f46e5;
+}
+
+.replay-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Map */

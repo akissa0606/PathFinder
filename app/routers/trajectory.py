@@ -30,7 +30,7 @@ async def get_trajectory(
     rows = await cursor.fetchall()
 
     segments = [
-        TrajectorySegment(**{k: row[k] for k in row.keys() if k != "trip_id"})
+        TrajectorySegment(**{k: row[k] for k in TrajectorySegment.model_fields})
         for row in rows
     ]
     return TrajectoryResponse(segments=segments)

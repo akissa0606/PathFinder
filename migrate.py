@@ -4,17 +4,16 @@
 import asyncio
 import sys
 
+from app.config import settings
 from app.db import init_db
 
 
 async def main():
     try:
         await init_db()
-        from app.config import settings
-
         print("✅ Database initialized successfully")
         print(f"   Path: {settings.database_path}")
-        print("   Tables: trips, places, distance_cache")
+        print("   Tables: trips, places, distance_cache, trajectory_segments")
     except Exception as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         sys.exit(1)

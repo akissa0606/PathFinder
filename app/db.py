@@ -2,7 +2,6 @@
 
 import os
 from collections.abc import AsyncGenerator
-from typing import Any
 
 import aiosqlite
 
@@ -68,25 +67,21 @@ async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
         await db.close()
 
 
-async def _ensure_timezone_column(db: aiosqlite.Connection) -> None:
-    """
-    Ensure `timezone` column exists on `trips`. Adds it if missing.
-
-    Works with either default tuple rows returned by PRAGMA or with Row mappings.
-    """
-    cursor = await db.execute("PRAGMA table_info(trips)")
+async def _get_column_names(db: aiosqlite.Connection, table: str) -> set[str]:
+    """Fetch column names from PRAGMA table_info."""
+    cursor = await db.execute(f"PRAGMA table_info({table})")
     rows = await cursor.fetchall()
 
-    col_names: list[Any] = []
+    col_names = set()
     for row in rows:
-        # PRAGMA table_info returns rows where column name is either accessible
-        # by index 1 (tuple) or by key "name" (mapping). Handle both.
-        try:
-            name = row["name"]  # type: ignore[index]
-        except Exception:
-            name = row[1]  # type: ignore[index]
-        col_names.append(name)
+        # PRAGMA table_info rows can be accessed by index 1 (column name).
+        col_names.add(row[1])  # type: ignore[index]
+    return col_names
 
+
+async def _ensure_timezone_column(db: aiosqlite.Connection) -> None:
+    """Ensure `timezone` column exists on `trips`. Adds it if missing."""
+    col_names = await _get_column_names(db, "trips")
     if "timezone" not in col_names:
         await db.execute(
             "ALTER TABLE trips ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'"
@@ -95,16 +90,7 @@ async def _ensure_timezone_column(db: aiosqlite.Connection) -> None:
 
 async def _ensure_status_columns(db: aiosqlite.Connection) -> None:
     """Ensure `status` and `completed_at` columns exist on `trips`. Adds them if missing."""
-    cursor = await db.execute("PRAGMA table_info(trips)")
-    rows = await cursor.fetchall()
-
-    col_names: list[Any] = []
-    for row in rows:
-        try:
-            col_names.append(row["name"])  # type: ignore[index]
-        except Exception:
-            col_names.append(row[1])  # type: ignore[index]
-
+    col_names = await _get_column_names(db, "trips")
     if "status" not in col_names:
         await db.execute(
             "ALTER TABLE trips ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"

@@ -140,14 +140,17 @@ Frontend communicates via REST + **Server-Sent Events (SSE)** for real-time feas
 1. User creates trip: city, arrive-by time, start location, transport mode, closed/open trip type
 2. Adds places with priority and expected duration — map shows feasibility-colored pins
 3. Taps "What Next?" — algorithm suggests best next destination based on current position
+   - Recommendation card highlights the place on the map with a pulsing marker
+   - Dashed amber preview polyline animates from user's current position to the recommendation
 4. Taps "Go" — Google Maps opens in new tab with directions; app waits for return
 5. User returns to app — "Did you arrive at [place]?" prompt for one-tap check-in
 6. On arrival: trajectory segment drawn on map (road-following arc, like Flighty flight arcs)
+   - Animated dot travels along the segment (2-second animation)
 7. Taps "Done" when finished — manually requests next recommendation when ready
 8. Repeat until all places visited:
    - Closed trip: "Head back to your starting point"
    - Open trip: "Head to your final destination"
-9. Trip is archived — user can view a summary page with stats, map, and place list
+9. Trip is archived — user can view a summary page with stats, map, place list, and a "Replay Journey" button to animate the full path
 
 ---
 
@@ -156,7 +159,11 @@ Frontend communicates via REST + **Server-Sent Events (SSE)** for real-time feas
 - Journey segments stored in `trajectory_segments` table (survives page refresh)
 - On "arrived" check-in: OSRM route geometry fetched from last position to arrived place
 - If OSRM is unavailable, the segment is **skipped** (no fake straight lines drawn)
-- Frontend draws segments as semi-transparent purple polylines (encoded polyline decoding inline)
+- Frontend draws segments as semi-transparent purple polylines
+  - Polyline decoding extracted to `map-utils.js` utility module
+  - On Dashboard: animated dot travels along trajectory on check-in (2s duration)
+  - On Summary: "Replay Journey" button animates a dot retracing the full journey, with segment durations scaled to 800–3000ms
+- Animation powered by `animejs` library (SVG path animation)
 
 ---
 

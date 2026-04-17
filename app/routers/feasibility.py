@@ -105,7 +105,7 @@ async def compute_feasibility(
     trip_tz_name: str = trip.get("timezone") or "UTC"
     try:
         trip_tz: ZoneInfo | timezone = ZoneInfo(trip_tz_name)
-    except (KeyError, Exception):
+    except Exception:
         trip_tz = timezone.utc
 
     # Interpret stored times in the trip's local timezone, then convert to UTC
@@ -121,6 +121,8 @@ async def compute_feasibility(
         ).astimezone(timezone.utc)
     else:
         current_time = datetime.now(timezone.utc)
+
+    trip_timezone: str | None = trip.get("timezone")
 
     remaining_minutes: float = max(0, (trip_end_dt - current_time).total_seconds() / 60)
 
@@ -143,7 +145,7 @@ async def compute_feasibility(
             current_time=current_time,
             trip_end_dt=trip_end_dt,
             trip_date=trip_date,
-            trip_timezone=trip.get("timezone"),
+            trip_timezone=trip_timezone,
             endpoint_idx=0,
             place_names=place_names,
             place_priorities=place_priorities,
@@ -166,7 +168,7 @@ async def compute_feasibility(
         matrix: list[list[float]] = await get_distance_matrix(
             coords, trip["transport_mode"]
         )
-    except (ValueError, Exception):
+    except Exception:
         logger.warning(
             "OSRM unreachable for trip %s — falling back to straight-line estimates",
             trip_id,
@@ -188,7 +190,7 @@ async def compute_feasibility(
             current_time=current_time,
             trip_end_time=trip_end_dt,
             trip_date=trip_date,
-            trip_timezone=trip.get("timezone"),
+            trip_timezone=trip_timezone,
         )
         results.append(FeasibilityResult(**result))
 
@@ -198,7 +200,7 @@ async def compute_feasibility(
         current_time=current_time,
         trip_end_dt=trip_end_dt,
         trip_date=trip_date,
-        trip_timezone=trip.get("timezone"),
+        trip_timezone=trip_timezone,
         endpoint_idx=endpoint_idx,
         place_names=place_names,
         place_priorities=place_priorities,

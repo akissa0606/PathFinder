@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import L from "leaflet";
+import { animateDotAlongPolyline, decodePolyline } from "../map-utils.js";
 import {
   getTrip,
   updateTrip,
@@ -560,10 +561,15 @@ async function confirmArrivalAtEnd() {
 }
 
 let highlightMarker = null;
+let previewPolyline = null;
 function highlightRecommendation() {
   if (highlightMarker && map) {
     map.removeLayer(highlightMarker);
     highlightMarker = null;
+  }
+  if (previewPolyline && map) {
+    map.removeLayer(previewPolyline);
+    previewPolyline = null;
   }
   if (!nextRecs.value || !map) return;
   const recs = nextRecs.value.recommendations || [];
@@ -571,6 +577,8 @@ function highlightRecommendation() {
   if (!rec) return;
   const place = places.value.find((p) => p.id === rec.place_id);
   if (!place) return;
+
+  // Draw pulsing circle marker
   highlightMarker = L.circleMarker([place.lat, place.lon], {
     radius: 18,
     color: "#f59e0b",
@@ -579,7 +587,31 @@ function highlightRecommendation() {
     weight: 3,
     className: "rec-pulse",
   }).addTo(map);
-  map.setView([place.lat, place.lon], 15);
+  map.setView([place.lat, place.lon], 15, { animate: false });
+
+  // Draw preview polyline from current position to destination
+  const origin = getLastPosition();
+  if (origin) {
+    previewPolyline = L.polyline(
+      [[origin.lat, origin.lon], [place.lat, place.lon]],
+      {
+        color: "#f59e0b",
+        weight: 2,
+        opacity: 0.4,
+        dashArray: "5, 5",
+        lineCap: "round",
+        lineJoin: "round",
+      }
+    ).addTo(map);
+
+    // Animate dot along preview
+    animateDotAlongPolyline(previewPolyline, 1500, "#f59e0b", () => {
+      if (previewPolyline && map) {
+        map.removeLayer(previewPolyline);
+        previewPolyline = null;
+      }
+    });
+  }
 }
 
 async function handleCheckin(placeId, action) {
@@ -592,6 +624,12 @@ async function handleCheckin(placeId, action) {
     if (action === "arrived" && result.trajectory_segment) {
       trajectorySegments.value.push(result.trajectory_segment);
       drawTrajectorySegment(result.trajectory_segment);
+      // Animate dot along trajectory segment
+      const layers = trajectoryLayerGroup.getLayers();
+      if (layers.length > 0) {
+        const newest = layers[layers.length - 1];
+        animateDotAlongPolyline(newest, 2000);
+      }
     }
     if (action === "arrived") {
       pendingArrivalPlace.value = null;
@@ -661,6 +699,10 @@ function dismissNextCard() {
   if (highlightMarker && map) {
     map.removeLayer(highlightMarker);
     highlightMarker = null;
+  }
+  if (previewPolyline && map) {
+    map.removeLayer(previewPolyline);
+    previewPolyline = null;
   }
 }
 
@@ -781,34 +823,6 @@ async function confirmClickAdd() {
 }
 
 // --- Trajectory ---
-
-function decodePolyline(encoded) {
-  const points = [];
-  let index = 0,
-    lat = 0,
-    lng = 0;
-  while (index < encoded.length) {
-    let b,
-      shift = 0,
-      result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lng += result & 1 ? ~(result >> 1) : result >> 1;
-    points.push([lat / 1e5, lng / 1e5]);
-  }
-  return points;
-}
 
 function drawTrajectorySegment(segment) {
   if (!map || !trajectoryLayerGroup) return;

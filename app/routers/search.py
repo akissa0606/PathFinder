@@ -4,10 +4,9 @@ import logging
 import re
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Query
 
-from app.http_client import client_instance
+from app.http_client import get_or_create_http_client
 from app.services.overpass import OVERPASS_ENDPOINTS
 
 logger = logging.getLogger(__name__)
@@ -20,19 +19,12 @@ NOMINATIM_HEADERS: dict[str, str] = {"User-Agent": "PathFinder/2.0"}
 @router.get("/geocode")
 async def geocode(q: str = Query(..., min_length=1)) -> list[dict[str, Any]]:
     """Geocode a place name using Nominatim. Returns up to 5 results."""
-    client = client_instance()
-    if client is not None:
+    async with get_or_create_http_client(timeout_seconds=10.0) as client:
         resp = await client.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": q, "format": "json", "limit": 5, "addressdetails": 1},
             headers=NOMINATIM_HEADERS,
         )
-    else:
-        async with httpx.AsyncClient(timeout=10.0, headers=NOMINATIM_HEADERS) as tmp:
-            resp = await tmp.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": q, "format": "json", "limit": 5, "addressdetails": 1},
-            )
     resp.raise_for_status()
     data = resp.json()
 
@@ -80,14 +72,10 @@ async def _search_overpass(
         f"out center tags 10;"
     )
 
-    client = client_instance()
     for endpoint in OVERPASS_ENDPOINTS:
         try:
-            if client is not None:
+            async with get_or_create_http_client(timeout_seconds=4.0) as client:
                 resp = await client.post(endpoint, data={"data": query}, timeout=4.0)
-            else:
-                async with httpx.AsyncClient(timeout=4.0) as tmp:
-                    resp = await tmp.post(endpoint, data={"data": query})
             if resp.status_code != 200:
                 continue
             elements: list[dict[str, Any]] = resp.json().get("elements", [])
@@ -102,7 +90,6 @@ async def _search_overpass(
 async def _search_nominatim(q: str, lat: float, lon: float) -> list[dict[str, Any]]:
     """Geocode query via Nominatim and return results in the same shape as Overpass results."""
     try:
-        client = client_instance()
         nominatim_params = {
             "q": q,
             "format": "json",
@@ -112,19 +99,13 @@ async def _search_nominatim(q: str, lat: float, lon: float) -> list[dict[str, An
             "viewbox": f"{lon - 0.1},{lat + 0.1},{lon + 0.1},{lat - 0.1}",
             "bounded": 1,
         }
-        if client is not None:
+        async with get_or_create_http_client(timeout_seconds=5.0) as client:
             resp = await client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params=nominatim_params,
                 headers=NOMINATIM_HEADERS,
                 timeout=5.0,
             )
-        else:
-            async with httpx.AsyncClient(timeout=5.0, headers=NOMINATIM_HEADERS) as tmp:
-                resp = await tmp.get(
-                    "https://nominatim.openstreetmap.org/search",
-                    params=nominatim_params,
-                )
         resp.raise_for_status()
         data: list[dict[str, Any]] = resp.json()
     except Exception:

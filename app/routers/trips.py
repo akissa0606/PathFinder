@@ -43,7 +43,7 @@ async def create_trip(
             status_code=400,
             detail=f"End time ({body.end_time}) must be after start time ({start_time})",
         )
-    _ = await db.execute(
+    await db.execute(
         """INSERT INTO trips
            (id, city, start_lat, start_lon, end_lat, end_lon,
             start_time, end_time, date, transport_mode, timezone, created_at, updated_at)
@@ -92,13 +92,11 @@ async def _recompute_distances_background(
     trip_id: str, profile: str, db_path: str
 ) -> None:
     """Recompute full distance matrix for all places in a trip after mode change."""
-    import aiosqlite as _aiosqlite
-
     from app.services.osrm import get_distance_matrix
 
     try:
-        async with _aiosqlite.connect(db_path) as db:
-            db.row_factory = _aiosqlite.Row
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT id, lat, lon FROM places WHERE trip_id = ?", (trip_id,)
             )
@@ -155,13 +153,14 @@ async def update_trip(
     updates["updated_at"] = now
     set_clause: str = ", ".join(f"{k} = ?" for k in updates)
     values: list[Any] = list(updates.values()) + [trip_id]
-    _ = await db.execute(f"UPDATE trips SET {set_clause} WHERE id = ?", values)
-    await db.commit()
+    await db.execute(f"UPDATE trips SET {set_clause} WHERE id = ?", values)
 
     # Invalidate distance cache when transport mode changes
     if "transport_mode" in updates:
-        _ = await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
-        await db.commit()
+        await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
+
+    # Recompute distance cache in background if transport mode changed
+    if "transport_mode" in updates:
         background_tasks.add_task(
             _recompute_distances_background,
             trip_id,
@@ -169,10 +168,10 @@ async def update_trip(
             settings.database_path,
         )
 
+    await db.commit()
+
     cursor = await db.execute("SELECT * FROM trips WHERE id = ?", (trip_id,))
     updated = await cursor.fetchone()
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Trip not found")
     return TripResponse(**dict(updated))  # type: ignore[arg-type]
 
 
@@ -182,11 +181,11 @@ async def delete_trip(trip_id: str, db: aiosqlite.Connection = Depends(get_db)) 
     if not await cursor.fetchone():
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    _ = await db.execute(
+    await db.execute(
         "DELETE FROM trajectory_segments WHERE trip_id = ?", (trip_id,)
     )
-    _ = await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
-    _ = await db.execute("DELETE FROM places WHERE trip_id = ?", (trip_id,))
+    await db.execute("DELETE FROM distance_cache WHERE trip_id = ?", (trip_id,))
+    await db.execute("DELETE FROM places WHERE trip_id = ?", (trip_id,))
     _ = await db.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
     await db.commit()
 

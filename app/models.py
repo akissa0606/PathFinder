@@ -7,6 +7,13 @@ from pydantic import BaseModel, Field, field_validator
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
+
+def _validate_time_format(v: str | None) -> str | None:
+    """Validate time format HH:MM (00:00–23:59)."""
+    if v is not None and not _TIME_RE.match(v):
+        raise ValueError("time must be in HH:MM format (00:00–23:59)")
+    return v
+
 # ---------------------------------------------------------------------------
 # Trip
 # ---------------------------------------------------------------------------
@@ -22,14 +29,12 @@ class TripCreate(BaseModel):
     end_time: str  # "18:00"
     date: str | None = None  # "2026-04-15" — defaults to today
     transport_mode: Literal["foot", "car", "bicycle"] = "foot"
-    timezone: str | None = "UTC"
+    timezone: str = "UTC"
 
     @field_validator("start_time", "end_time")
     @classmethod
     def validate_time_format(cls, v: str | None) -> str | None:
-        if v is not None and not _TIME_RE.match(v):
-            raise ValueError("time must be in HH:MM format (00:00–23:59)")
-        return v
+        return _validate_time_format(v)
 
 
 class TripUpdate(BaseModel):
@@ -41,9 +46,7 @@ class TripUpdate(BaseModel):
     @field_validator("start_time", "end_time")
     @classmethod
     def validate_time_format(cls, v: str | None) -> str | None:
-        if v is not None and not _TIME_RE.match(v):
-            raise ValueError("time must be in HH:MM format (00:00–23:59)")
-        return v
+        return _validate_time_format(v)
 
 
 class TripResponse(BaseModel):
@@ -57,7 +60,7 @@ class TripResponse(BaseModel):
     end_time: str
     date: str
     transport_mode: str
-    timezone: str | None = "UTC"
+    timezone: str = "UTC"
     status: str = "active"
     completed_at: str | None = None
     created_at: str
@@ -149,13 +152,36 @@ class CheckinRequest(BaseModel):
     action: Literal["arrived", "done", "skipped"]
 
 
+# ---------------------------------------------------------------------------
+# Trajectory
+# ---------------------------------------------------------------------------
+
+
+class TrajectorySegment(BaseModel):
+    id: int
+    from_lat: float
+    from_lon: float
+    to_lat: float
+    to_lon: float
+    place_id: int | None
+    geometry: str
+    distance_meters: float
+    duration_seconds: float
+    created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Check-in
+# ---------------------------------------------------------------------------
+
+
 class CheckinResponse(BaseModel):
     place_id: int
     status: str
     arrived_at: str | None
     departed_at: str | None
     message: str
-    trajectory_segment: "TrajectorySegment | None" = None
+    trajectory_segment: TrajectorySegment | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -175,24 +201,6 @@ class NextRecommendation(BaseModel):
 class NextResponse(BaseModel):
     recommendations: list[NextRecommendation]
     message: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Trajectory
-# ---------------------------------------------------------------------------
-
-
-class TrajectorySegment(BaseModel):
-    id: int
-    from_lat: float
-    from_lon: float
-    to_lat: float
-    to_lon: float
-    place_id: int | None
-    geometry: str
-    distance_meters: float
-    duration_seconds: float
-    created_at: str
 
 
 class TrajectoryResponse(BaseModel):

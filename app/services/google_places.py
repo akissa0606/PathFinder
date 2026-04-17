@@ -85,12 +85,11 @@ async def get_opening_hours(lat: float, lon: float, name: str) -> str | None:
                     )
                     await asyncio.sleep(wait)
                     continue
-                else:
-                    logger.error(
-                        "Google Places rate-limited (429) and exhausted retries for %r",
-                        name,
-                    )
-                    return None
+                logger.error(
+                    "Google Places rate-limited (429) and exhausted retries for %r",
+                    name,
+                )
+                return None
 
             # Raise for other 4xx/5xx so we hit request-exception handler
             resp.raise_for_status()
@@ -125,11 +124,10 @@ async def get_opening_hours(lat: float, lon: float, name: str) -> str | None:
                 max_attempts,
             )
             if attempt < max_attempts:
-                await asyncio.sleep(backoff_base * (2 ** (attempt - 1)))
+                wait: float = backoff_base * (2 ** (attempt - 1))
+                await asyncio.sleep(wait)
                 continue
             return None
         except Exception:
             logger.exception("Google Places API unexpected error for %r", name)
             return None
-
-    return None

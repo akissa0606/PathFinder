@@ -66,7 +66,7 @@ async def checkin(
     trajectory_segment: TrajectorySegment | None = None
 
     if action == "arrived":
-        _ = await db.execute(
+        await db.execute(
             "UPDATE places SET status = 'visiting', arrived_at = ? WHERE id = ?",
             (now, body.place_id),
         )
@@ -76,21 +76,18 @@ async def checkin(
         trajectory_segment = await _record_trajectory(db, trip_id, place, now)
 
     elif action == "done":
-        _ = await db.execute(
+        await db.execute(
             "UPDATE places SET status = 'done', departed_at = ? WHERE id = ?",
             (now, body.place_id),
         )
         message = f"Finished visiting {place['name']}"
 
     elif action == "skipped":
-        _ = await db.execute(
+        await db.execute(
             "UPDATE places SET status = 'skipped' WHERE id = ?",
             (body.place_id,),
         )
         message = f"Skipped {place['name']}"
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
     await db.commit()
 

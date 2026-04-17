@@ -105,8 +105,9 @@ async def get_http_client() -> AsyncGenerator[httpx.AsyncClient, None]:
         # Lazy init if startup did not initialize; keep defaults
         await init_http_client()
 
-    # mypy/static checkers: at this point _client is guaranteed non-None
-    assert _client is not None
+    # At this point _client is guaranteed non-None
+    if _client is None:
+        raise RuntimeError("Failed to initialize HTTP client")
     yield _client
 
 
@@ -119,9 +120,40 @@ def client_instance() -> httpx.AsyncClient | None:
     return _client
 
 
+async def get_or_create_http_client(
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """
+    Get the shared AsyncClient or create a temporary one.
+
+    Useful for background tasks and services that cannot use FastAPI dependency injection.
+    If the shared client is available, yields it. Otherwise, creates a temporary one
+    that is closed after use.
+
+    Args:
+        timeout_seconds: Request timeout for temporary clients (ignored if using shared client)
+
+    Yields:
+        An AsyncClient instance (shared or temporary)
+    """
+    global _client
+    if _client is not None:
+        # Use shared client (don't close it)
+        yield _client
+    else:
+        # Create temporary client for this context
+        timeout = httpx.Timeout(timeout_seconds)
+        temp_client = httpx.AsyncClient(timeout=timeout)
+        try:
+            yield temp_client
+        finally:
+            await temp_client.aclose()
+
+
 __all__ = [
     "init_http_client",
     "close_http_client",
     "get_http_client",
+    "get_or_create_http_client",
     "client_instance",
 ]

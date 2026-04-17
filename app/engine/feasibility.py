@@ -30,6 +30,17 @@ from app.engine.category_defaults import get_duration_minutes
 
 logger = logging.getLogger(__name__)
 
+# Day abbreviations to weekday index mapping (Python uses 0=Monday...6=Sunday)
+_DAY_MAP: dict[str, int] = {
+    "Mo": 0,
+    "Tu": 1,
+    "We": 2,
+    "Th": 3,
+    "Fr": 4,
+    "Sa": 5,
+    "Su": 6,
+}
+
 
 def _to_utc_aware(dt: datetime | None) -> datetime:
     """
@@ -115,16 +126,7 @@ def calculate_feasibility(
             opening_hours, trip_date, trip_timezone
         )
         if parsed:
-            # parse_closing_time returns a timezone-aware UTC datetime; coerce defensively
-            try:
-                closing_time_utc = _to_utc_aware(parsed)
-            except Exception:
-                # If parse returned something odd, skip opening-hours logic
-                logger.exception(
-                    "parse_closing_time returned unparseable value; ignoring opening hours for place %s",
-                    place.get("id"),
-                )
-                closing_time_utc = None
+            closing_time_utc = _to_utc_aware(parsed)
 
     if closing_time_utc:
         closing_urgency_sec = (closing_time_utc - arrival_at_place).total_seconds()
@@ -202,15 +204,6 @@ def parse_closing_time(
     if not opening_hours:
         return None
 
-    DAY_MAP: dict[str, int] = {
-        "Mo": 0,
-        "Tu": 1,
-        "We": 2,
-        "Th": 3,
-        "Fr": 4,
-        "Sa": 5,
-        "Su": 6,
-    }
     weekday: int = trip_date.weekday()
 
     # Resolve timezone object if provided
@@ -248,8 +241,8 @@ def parse_closing_time(
                 # try range like Mo-Fr
                 rng = re.match(r"^([A-Za-z]{2})\s*-\s*([A-Za-z]{2})$", seg)
                 if rng:
-                    start: int | None = DAY_MAP.get(rng.group(1))
-                    end: int | None = DAY_MAP.get(rng.group(2))
+                    start: int | None = _DAY_MAP.get(rng.group(1))
+                    end: int | None = _DAY_MAP.get(rng.group(2))
                     if start is None or end is None:
                         continue
                     if start <= end:
@@ -263,7 +256,7 @@ def parse_closing_time(
                             break
                 else:
                     # single day like 'Mo' or abbreviation
-                    single: int | None = DAY_MAP.get(seg)
+                    single: int | None = _DAY_MAP.get(seg)
                     if single is not None and single == weekday:
                         matches_day = True
                         break
@@ -297,8 +290,6 @@ def _format_duration(seconds: float) -> str:
         secs: int = int(seconds)
     except Exception:
         return "0 min"
-    if secs < 60:
-        return f"{secs} sec"
     minutes: int = secs // 60
     if minutes < 60:
         return f"{minutes} min"
