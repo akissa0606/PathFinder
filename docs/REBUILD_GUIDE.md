@@ -2,8 +2,12 @@
 
 This guide walks you through rebuilding PathFinder from scratch. Each slice is a self-contained milestone that you can commit, test, and demo independently. The slices are ordered by dependency — each one builds on the previous.
 
-**Total codebase**: ~7,000 lines (3,100 backend Python + 3,900 frontend Vue/JS/CSS)
-**Test suite**: 72 tests across 10 files
+**Total codebase**: ~7,200 lines (3,200 backend Python + 4,000 frontend Vue/JS/CSS)
+**Test suite**: 73 tests across 9 files
+
+**Companion docs** (read alongside this guide):
+- `docs/API_SPEC.md` — exact request/response shapes for every endpoint
+- `docs/ALGORITHMS.md` — feasibility, scoring, opening hours parsing, Anime.js animations
 
 ---
 
@@ -195,13 +199,67 @@ CREATE TABLE IF NOT EXISTS trajectory_segments (
 ```
 
 - Indexes on: `places(trip_id)`, `distance_cache(trip_id)`, `trajectory_segments(trip_id)`
-- `init_db()` — creates tables + adds backward-compat columns if missing
-- `get_db()` — FastAPI dependency yielding aiosqlite connection
+- `get_db()` — FastAPI dependency yielding aiosqlite connection with `row_factory = aiosqlite.Row`
 
-**`app/http_client.py`** (~128 lines)
-- Module-level shared `httpx.AsyncClient` with connection pooling
-- `init_http_client()`, `close_http_client()`, `get_http_client()` (FastAPI dep), `client_instance()`
-- Defaults: 15s timeout, 20 max connections, 10 keepalive, custom User-Agent
+**`init_db()`** — called at startup and by `migrate.py`. Safe to run multiple times (all CREATE TABLE use `IF NOT EXISTS`). Also runs **backward-compatible migrations** for older databases:
+
+```python
+async def _get_column_names(db, table) -> set[str]:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    rows = await cursor.fetchall()
+    return {row[1] for row in rows}  # row[1] = column name
+
+async def _ensure_timezone_column(db):
+    cols = await _get_column_names(db, "trips")
+    if "timezone" not in cols:
+        await db.execute("ALTER TABLE trips ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
+
+async def _ensure_status_columns(db):
+    cols = await _get_column_names(db, "trips")
+    if "status" not in cols:
+        await db.execute("ALTER TABLE trips ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+    if "completed_at" not in cols:
+        await db.execute("ALTER TABLE trips ADD COLUMN completed_at TEXT")
+```
+
+This pattern is important: `PRAGMA table_info(table)` returns rows where index `[1]` is the column name. Always check before `ALTER TABLE` — SQLite does not support `ADD COLUMN IF NOT EXISTS`.
+
+**`app/http_client.py`** (~162 lines)
+
+Shared `httpx.AsyncClient` with connection pooling. The key idea: one client instance for the whole app lifetime, reused across all services (OSRM, Overpass, Google Places). This avoids the overhead of opening a new TCP connection on every request.
+
+```python
+# Module-level instance
+_client: httpx.AsyncClient | None = None
+
+# Called in lifespan startup
+async def init_http_client() -> None: ...
+
+# Called in lifespan shutdown
+async def close_http_client() -> None: ...
+
+# FastAPI dependency (yields shared client, never closes it)
+async def get_http_client() -> AsyncGenerator[httpx.AsyncClient, None]: ...
+
+# For service code that can't use DI (e.g., OSRM, Overpass services called outside a request)
+def client_instance() -> httpx.AsyncClient | None: ...
+
+# For background tasks (async context manager — uses shared client if available, creates temp if not)
+@asynccontextmanager
+async def get_or_create_http_client(...) -> AsyncGenerator[httpx.AsyncClient, None]: ...
+```
+
+Defaults: 15s timeout, 20 max connections, 10 keepalive, custom User-Agent header.
+
+**Why `get_or_create_http_client()`**: Background tasks run outside FastAPI's request lifecycle, so they can't use DI. This context manager provides a client regardless — it yields the shared one if initialized, otherwise creates and closes a temporary one.
+
+```python
+# Usage in background tasks (places.py, trips.py):
+async with get_or_create_http_client() as client:
+    resp = await client.get(url)
+```
+
+**Why `client_instance()`**: OSRM and other services are called from within request handlers indirectly (not as FastAPI dependencies). They call `client_instance()` to grab the global client. Falls back gracefully to `None` (callers handle it).
 
 **`app/main.py`** (~25 lines for now, grows later)
 - FastAPI app with lifespan (init DB + HTTP client on startup, close on shutdown)
@@ -244,7 +302,33 @@ Other models (add now as empty stubs, fill in later slices):
 - `GET /api/trips/{trip_id}` → trip with places (joined query), 404 if missing
 - `PATCH /api/trips/{trip_id}` → update allowed fields. On transport_mode change: delete distance_cache, background recompute (once OSRM is wired up)
 - `DELETE /api/trips/{trip_id}` → cascade delete trajectory_segments, distance_cache, places, trip (in order)
-- `POST /api/trips/{trip_id}/archive` → set status=archived, completed_at=now
+- `POST /api/trips/{trip_id}/archive` → set status=archived, completed_at=now, **and record the closing trajectory segment** (last position → trip endpoint via OSRM)
+
+**Closing segment logic** (in `_record_closing_segment()` called from archive):
+```python
+# Find last position
+cursor = await db.execute(
+    "SELECT to_lat, to_lon FROM trajectory_segments WHERE trip_id=? ORDER BY created_at DESC LIMIT 1",
+    (trip_id,)
+)
+last_pos = await cursor.fetchone()
+from_lat = last_pos["to_lat"] if last_pos else trip["start_lat"]
+from_lon = last_pos["to_lon"] if last_pos else trip["start_lon"]
+
+# Skip if already at end point (within 0.0001 degrees ≈ 10m)
+if abs(from_lat - end_lat) < 0.0001 and abs(from_lon - end_lon) < 0.0001:
+    return
+
+# Get real road geometry from OSRM
+legs = await get_route_geometry([[from_lon, from_lat], [end_lon, end_lat]], transport_mode)
+if not legs or not legs[0].get("geometry"):
+    return  # OSRM down — skip silently
+
+# Insert with place_id = NULL (closing leg has no associated place)
+await db.execute("INSERT INTO trajectory_segments ... VALUES (..., NULL, ...)", ...)
+```
+
+This ensures the Summary page shows a complete path including the return leg, and the replay animation returns to the trip's endpoint.
 
 **`app/routers/places.py`** (~231 lines)
 - `POST /api/trips/{trip_id}/places` → 201, insert with status=pending, background tasks for hours resolution + distance caching (wire up in later slices)
@@ -322,6 +406,33 @@ Important: includes **Haversine fallback** for when OSRM is down:
 - Profile speeds: foot=1.4 m/s (~5 km/h), bicycle=4.2 m/s (~15 km/h), car=8.3 m/s (~30 km/h)
 
 Also exports `compute_feasibility()` shared helper used by both this endpoint and next_action/stream.
+
+**`FeasibilityContext` dataclass** (defined in `app/routers/feasibility.py`):
+
+```python
+@dataclass
+class FeasibilityContext:
+    places: list[dict]           # pending places (dicts from DB)
+    matrix: list[list[float]]    # full distance matrix [n+2 × n+2]: user + places + endpoint
+    current_time: datetime        # UTC-aware current time
+    trip_end_dt: datetime         # UTC-aware trip end time
+    trip_date: date               # local trip date
+    endpoint_idx: int             # index of trip endpoint in matrix
+    place_names: dict[int, str]   # place_id → name
+    place_priorities: dict[int, str]  # place_id → "must"|"want"|"if_time"
+    trip_timezone: str | None     # IANA timezone string from trip
+```
+
+`compute_feasibility()` returns `(FeasibilityResponse, FeasibilityContext)`. The context is passed to `score_next_actions()` so the scoring engine doesn't need to re-fetch the DB or recompute the OSRM matrix.
+
+**Timezone flow**: Start/end times are stored as plain HH:MM strings. `compute_feasibility()` combines them with `trip_date` and `trip_timezone` to get UTC-aware datetimes:
+
+```python
+trip_tz = ZoneInfo(trip.get("timezone") or "UTC")
+trip_end_dt = datetime.combine(trip_date, time(end_h, end_m), tzinfo=trip_tz).astimezone(timezone.utc)
+```
+
+The same `trip_timezone` string is passed down to `calculate_feasibility()` → `parse_closing_time()` so opening hours comparisons use the correct local time.
 
 ### How to wire up distance caching
 In `places.py`, the background task `_cache_distances_background()` should now call `get_distance_matrix()` and store results in `distance_cache`. The feasibility router reads from cache first and only calls OSRM for the user's current position (not cached).
@@ -442,6 +553,23 @@ Two endpoints:
 2. `GET /api/geocode?q=`
    - Nominatim forward geocode
    - Returns up to 5 results
+
+### Background task implementations in `places.py`
+
+**`_resolve_hours_background(place_id, lat, lon, name, db_path)`**
+Opens its own `aiosqlite.connect(db_path)` (background tasks can't use FastAPI DI). Calls `resolve_opening_hours(lat, lon, name)`, then `UPDATE places SET opening_hours = ?, opening_hours_source = ?`.
+
+**`_cache_distances_background(trip_id, place_id, db_path)`**
+1. Open own DB connection
+2. Load trip (for transport_mode) and all places in the trip
+3. If `len(places) < 2`: return early (nothing to compute distances to)
+4. Build `coords = [[lon, lat] for p in all_places]`
+5. Call `get_distance_matrix(coords, profile)` → full N×N matrix
+6. Find `new_idx` = index of new place in all_places
+7. For every other place `i`, insert/replace two cache entries:
+   - `(trip_id, new_place_id, other_id, matrix[new_idx][i])`
+   - `(trip_id, other_id, new_place_id, matrix[i][new_idx])`
+8. Uses `INSERT OR REPLACE` — idempotent, safe to re-run
 
 ### Wire up background hours resolution
 In `places.py`, the `_resolve_hours_background()` task now calls `resolve_opening_hours()` and updates the place record.
@@ -647,10 +775,10 @@ function defaultDuration(place) {
 - New segment drawn immediately after "arrived" check-in
 
 **End-of-trip states:**
-- All places done + closed trip: "Head back to your starting point" with Google Maps button
-- All places done + open trip: "Head to your final destination" with Google Maps button
+- All places done + closed trip: "Head back to your starting point" with Google Maps button (no Back to Home — the trip isn't actually finished until they return)
+- All places done + open trip: "Head to your final destination" with Google Maps button (no Back to Home — same reason)
+- "All done!" banner when all places are visited/skipped and user has navigated to end — separate "Back to Home" button only there
 - Trip time expired: "Trip ended — visited X of Y places"
-- "Back to Home" button in all end states
 
 **Transport mode switching:**
 - Dropdown in trip header
@@ -671,9 +799,9 @@ function defaultDuration(place) {
 
 ## Slice 10 — Frontend: Summary Page
 
-**Goal**: Post-trip summary with stats and trajectory map.
-**Files to create**: `frontend/src/views/Summary.vue`
-**Lines**: ~499
+**Goal**: Post-trip summary with stats, trajectory map, and journey replay animation.
+**Files to create**: `frontend/src/views/Summary.vue`, `frontend/src/map-utils.js`
+**Lines**: ~560
 
 ### What to build
 
@@ -683,18 +811,32 @@ Loads trip data + trajectory. Displays:
 
 **Stats chips:** Visited count, skipped count, total distance (km), total travel time
 
+**Replay Journey button:** Only shown when segments exist. Disables map interaction, animates dot through each segment sequentially (800ms–3000ms per segment based on duration), 300ms pause between segments.
+
 **Map:** Leaflet with:
-- Trajectory polylines (purple)
+- Trajectory polylines (purple #6366f1)
 - Start pin (green), end pin (red, only if open trip)
 - Visited places (blue markers), skipped/not-reached (gray markers)
+- `map.fitBounds()` on all points after drawing
 
 **Places list:** Three sections:
 - Visited (✓): name, category, time spent
 - Skipped (✗): name, category
 - Not Reached (·): name, category
 
+**`frontend/src/map-utils.js`** (~58 lines)
+Shared utilities used by both Dashboard and Summary:
+- `decodePolyline(encoded)` — Google encoded polyline decoder → `[[lat, lng], ...]`
+- `animateDotAlongPolyline(polyline, durationMs, color, onComplete)` — Anime.js v4 motion path animation along a Leaflet SVG polyline (see `docs/ALGORITHMS.md` section 6 for details)
+
+### Key implementation notes
+- `segmentPolylines` array (parallel to `segments`) stores Leaflet polyline objects for replay
+- `replaying` ref drives button state ("Replay Journey" / "Replaying…")
+- Map interaction is disabled during replay (dragging, scroll zoom, box zoom, keyboard, double click, touch zoom)
+- Re-enable all in `finally` block so a JS error doesn't leave the map locked
+
 ### Commit message idea
-`feat: post-trip summary page with stats and trajectory map`
+`feat: post-trip summary page with stats, trajectory map, and journey replay`
 
 ---
 
@@ -790,6 +932,100 @@ Slice 12: Static Serving + Build (final)
 | 12 | 30 min | Day 16 |
 
 **Total: ~35-45 hours of focused coding over ~16 days**
+
+---
+
+## Running the Test Suite
+
+### Setup
+
+Tests use `pytest` with `pytest-asyncio`. Add a `pytest.ini` (or `pyproject.toml` section) at the root:
+
+```ini
+# pytest.ini
+[pytest]
+asyncio_mode = auto
+```
+
+This makes all `async def test_*` functions run automatically without needing `@pytest.mark.asyncio` on every one.
+
+Tests create a temporary SQLite database in a temp directory — they never touch your real `./data/pathfinder.db`.
+
+### Running tests
+
+```bash
+# Activate venv first
+source venv/bin/activate
+
+# Run all 73 tests
+pytest tests/ -v
+
+# Run a single test file
+pytest tests/test_slice2.py -v
+
+# Run one specific test
+pytest tests/test_slice2.py::test_feasibility_color_green -v
+
+# Run with output (print statements, logging)
+pytest tests/ -v -s
+
+# Stop on first failure
+pytest tests/ -x
+```
+
+### Test structure
+
+| File | Slice | What it tests | Count |
+|------|-------|---------------|-------|
+| `test_infrastructure.py` | 0 | DB creation, schema, column types, indexes | 9 |
+| `test_slice1.py` | 1 | Trip/place CRUD, 404s, validation | 9 |
+| `test_slice2.py` | 2 | Feasibility colors, Haversine fallback, category defaults | 11 |
+| `test_slice3.py` | 3 | Scoring weights, opportunity cost, top-3 ordering | 10 |
+| `test_slice4.py` | 4 | SSE urgency alerts, color degradation | 9 |
+| `test_slice6.py` | 6 | Transport mode switching, cache invalidation | 5 |
+| `test_slice7.py` | 7+ | Edge cases: empty trips, OSRM down, invalid transitions | 12 |
+| `test_trajectory.py` | 6 | Trajectory recording, last-position logic, cascade delete | 7 |
+| `test_scoring_timezone.py` | 11 | Timezone propagation through scoring engine | 1 |
+
+**Total: 73 tests**
+
+### Test fixtures pattern
+
+Each test file creates a fresh app and database:
+
+```python
+import pytest
+import tempfile
+import os
+from httpx import AsyncClient, ASGITransport
+from app.main import app
+from app.db import init_db
+from app.config import settings
+
+@pytest.fixture
+async def client():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test.db")
+        settings.database_path = db_path  # override for test
+        await init_db()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            yield ac
+```
+
+### Linting before tests
+
+```bash
+# Python linting
+ruff check app/ tests/
+
+# Auto-fix
+ruff check app/ tests/ --fix
+
+# Frontend formatting
+cd frontend && npx prettier --write src/
+```
+
+---
 
 ## Tips for Making It Look Natural
 
